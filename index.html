@@ -231,5 +231,20 @@
     }
     </script>
     <script type="module" src="js/main.js"></script>
+    <script>
+        window.addEventListener('error', function(e) {
+            console.error('JS Error:', e.message, e.filename, e.lineno);
+            var loading = document.getElementById('loading');
+            if (loading) {
+                loading.innerHTML = '<div style="color:#ff4444;font-size:14px;text-align:center;padding:20px;">加载失败，请按 F12 查看控制台报错<br><br>' + e.message + '</div>';
+            }
+        });
+        setTimeout(function() {
+            var loading = document.getElementById('loading');
+            if (loading && loading.style.display !== 'none') {
+                loading.innerHTML = '<div style="color:#ffaa00;font-size:14px;text-align:center;padding:20px;">加载超时，请按 F12 查看控制台</div>';
+            }
+        }, 15000);
+    </script>
 </body>
 </html>
