@@ -41,6 +41,13 @@ const BIOME_TREES = {
         density: 0.3,
         minHeight: -2,
         maxHeight: 2
+    },
+    coastal: {
+        trees: ['palm', 'oak', 'bush', 'willow', 'cypress'],
+        weights: [0.25, 0.2, 0.25, 0.15, 0.15],
+        density: 0.7,
+        minHeight: -1.0,
+        maxHeight: 4
     }
 };
 

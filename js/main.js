@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ProceduralTerrain } from './terrain.js';
-import { ProceduralHouse, SETTLEMENT_TYPES } from './house.js';
+import { ProceduralHouse } from './house.js';
 import { FireSystem } from './fire.js';
 import { WeatherSystem } from './weather.js';
 import { CitySystem } from './city.js';
@@ -24,7 +24,6 @@ class PCGWorld {
 
         this.state = {
             terrainType: 'plains',
-            settlementType: 'village',
             houseCount: 8,
             weather: 'clear',
             fireActive: false,
@@ -47,7 +46,13 @@ class PCGWorld {
         );
         this.camera.position.set(25, 20, 25);
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        try {
+            this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        } catch (e) {
+            const loading = document.getElementById('loading');
+            loading.innerHTML = '<div style="color:#f44;font-size:12px;text-align:center;padding:20px;font-family:Consolas,monospace;">WebGL 初始化失败: ' + e.message + '</div>';
+            return;
+        }
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.shadowMap.enabled = true;
@@ -182,9 +187,19 @@ class PCGWorld {
     }
 
     needsCitySystem() {
-        return this.state.settlementType === 'city' ||
-               this.state.terrainType === 'islands' ||
-               this.state.terrainType === 'city';
+        return this.state.terrainType === 'islands' ||
+               this.state.terrainType === 'city' ||
+               this.state.terrainType === 'coastal' ||
+               this.state.terrainType === 'suburban';
+    }
+
+    getHouseSettlementType() {
+        switch (this.state.terrainType) {
+            case 'suburban': return 'suburban';
+            case 'islands': return 'village';
+            case 'coastal': return 'village';
+            default: return 'village';
+        }
     }
 
     generateWorld() {
@@ -205,19 +220,20 @@ class PCGWorld {
             type: this.state.terrainType
         });
 
-        // City system
-        if (!this.city) {
-            this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
-        }
-
+        // City system for terrain types that need it
         if (this.needsCitySystem()) {
+            if (!this.city) {
+                this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
+            }
             this.city.generate(this.terrain, this.state.seed);
             if (this.state.lightsOn) {
                 this.city.setLights(true);
             }
+        } else if (this.city) {
+            this.city.clear();
         }
 
-        // Houses
+        // Houses - only for terrain types that don't have city system, or islands
         if (!this.houses) {
             this.houses = new ProceduralHouse(this.scene, new SimplexNoise(this.state.seed));
         } else {
@@ -225,7 +241,7 @@ class PCGWorld {
         }
 
         if (!this.needsCitySystem() || this.state.terrainType === 'islands') {
-            this.houses.settlementType = this.state.settlementType;
+            this.houses.settlementType = this.getHouseSettlementType();
             const count = this.state.terrainType === 'islands'
                 ? Math.min(this.state.houseCount, 5)
                 : this.state.houseCount;
@@ -249,23 +265,21 @@ class PCGWorld {
         }
         this.weather.setWeather(this.state.weather);
 
-        // Vegetation (new system)
+        // Vegetation
         if (!this.vegetation) {
             this.vegetation = new VegetationSystem(this.scene, new SimplexNoise(this.state.seed));
         } else {
             this.vegetation.noise = new SimplexNoise(this.state.seed);
         }
 
-        // Gather house positions for vegetation avoidance
         const housePositions = this.houses.houses.map(h => ({
             x: h.position.x,
             z: h.position.z,
             radius: h.userData.boundingRadius || 3
         }));
 
-        // Get road positions from city system for avoidance
         const roadPositions = [];
-        if (this.needsCitySystem() && this.city.intersections) {
+        if (this.city && this.city.intersections) {
             for (const inter of this.city.intersections) {
                 roadPositions.push({ x: inter.x, z: inter.z });
             }
@@ -273,7 +287,7 @@ class PCGWorld {
 
         this.vegetation.generate(this.terrain, {
             seed: this.state.seed,
-            settlementType: this.state.settlementType,
+            settlementType: this.getHouseSettlementType(),
             housePositions,
             roadPositions
         });
@@ -291,29 +305,12 @@ class PCGWorld {
     }
 
     setupUI() {
+        // Terrain type buttons (single selection, no separate settlement)
         document.querySelectorAll('[data-terrain]').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('[data-terrain]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this.state.terrainType = btn.dataset.terrain;
-
-                if (btn.dataset.terrain === 'city') {
-                    this.state.settlementType = 'city';
-                    document.querySelectorAll('[data-settlement]').forEach(b => b.classList.remove('active'));
-                    document.querySelector('[data-settlement="city"]').classList.add('active');
-                } else if (btn.dataset.terrain === 'islands') {
-                    this.state.settlementType = 'village';
-                    document.querySelectorAll('[data-settlement]').forEach(b => b.classList.remove('active'));
-                    document.querySelector('[data-settlement="village"]').classList.add('active');
-                }
-            });
-        });
-
-        document.querySelectorAll('[data-settlement]').forEach(btn => {
-            btn.addEventListener('click', () => {
-                document.querySelectorAll('[data-settlement]').forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-                this.state.settlementType = btn.dataset.settlement;
             });
         });
 
@@ -337,7 +334,7 @@ class PCGWorld {
         fireBtn.addEventListener('click', () => {
             this.state.fireActive = !this.state.fireActive;
             fireBtn.classList.toggle('active', this.state.fireActive);
-            fireBtn.textContent = this.state.fireActive ? '关闭火焰' : '开启火焰';
+            fireBtn.textContent = this.state.fireActive ? 'OFF' : 'ON';
             if (this.state.fireActive) {
                 this.fire.placeFiresAtHouses(this.houses.houses);
                 const centerSpot = this.terrain.findFlatSpot(0, 0, 10);
@@ -353,9 +350,9 @@ class PCGWorld {
         lightBtn.addEventListener('click', () => {
             this.state.lightsOn = !this.state.lightsOn;
             lightBtn.classList.toggle('active', this.state.lightsOn);
-            lightBtn.textContent = this.state.lightsOn ? '关闭灯光' : '开启灯光';
+            lightBtn.textContent = this.state.lightsOn ? 'OFF' : 'ON';
             this.houses.setInteriorLights(this.state.lightsOn);
-            this.city.setLights(this.state.lightsOn);
+            if (this.city) this.city.setLights(this.state.lightsOn);
         });
 
         const timeSlider = document.getElementById('timeSlider');
@@ -379,7 +376,7 @@ class PCGWorld {
             this.fire.clear();
             this.state.fireActive = false;
             fireBtn.classList.remove('active');
-            fireBtn.textContent = '开启火焰';
+            fireBtn.textContent = 'ON';
             this.generateWorld();
         });
     }
@@ -393,21 +390,25 @@ class PCGWorld {
     animate() {
         requestAnimationFrame(() => this.animate());
 
-        const deltaTime = this.clock.getDelta();
-        const time = this.clock.getElapsedTime();
+        try {
+            const deltaTime = this.clock.getDelta();
+            const time = this.clock.getElapsedTime();
 
-        this.controls.update();
-        this.terrain.update(time);
-        this.fire.update(time);
-        this.weather.update(time);
-        this.city.update(time);
+            this.controls.update();
 
-        const isSnowing = this.state.weather === 'snow';
-        if (this.terrain) {
-            this.terrain.updateSnowAccum(isSnowing, deltaTime);
+            if (this.terrain) {
+                this.terrain.update(time);
+                const isSnowing = this.state.weather === 'snow';
+                this.terrain.updateSnowAccum(isSnowing, deltaTime);
+            }
+            if (this.fire) this.fire.update(time);
+            if (this.weather) this.weather.update(time);
+            if (this.city) this.city.update(time);
+
+            this.renderer.render(this.scene, this.camera);
+        } catch (e) {
+            console.error('Animate error:', e);
         }
-
-        this.renderer.render(this.scene, this.camera);
     }
 }
 

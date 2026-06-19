@@ -304,6 +304,16 @@ class ProceduralTerrain {
                 h = Math.max(h, 0);
                 break;
 
+            case 'coastal':
+                // Coastal: flat land near water with gentle rise inland
+                const coastDist = (z + this.size * 0.2) / (this.size * 0.5);
+                const coastFalloff = Math.max(0, Math.min(1, coastDist));
+                h = this.noise.fbm(x * scale * 0.5, z * scale * 0.5, 3) * 2.0 * coastFalloff;
+                h += this.noise.fbm(x * scale * 2, z * scale * 2, 2) * 0.3 * coastFalloff;
+                // Lower the south side to create water edge
+                h -= (1 - coastFalloff) * 1.5;
+                break;
+
             default:
                 h = this.noise.fbm(x * scale, z * scale, 4) * 3;
         }
@@ -346,6 +356,9 @@ class ProceduralTerrain {
             case 'city':
                 this.waterLevel = -3;
                 break;
+            case 'coastal':
+                this.waterLevel = -0.5;
+                break;
             default:
                 this.waterLevel = -2;
         }
@@ -382,21 +395,26 @@ class ProceduralTerrain {
 
         // Island terrain gets different water colors
         const isIsland = this.terrainType === 'islands';
+        const isCoastal = this.terrainType === 'coastal';
         const isCity = this.terrainType === 'city' || this.terrainType === 'suburban';
 
         const deepColor = isIsland
-            ? new THREE.Color(0.02, 0.12, 0.35)   // Deep tropical
+            ? new THREE.Color(0.02, 0.12, 0.35)
+            : isCoastal
+                ? new THREE.Color(0.02, 0.15, 0.4)
             : isCity
-                ? new THREE.Color(0.03, 0.1, 0.3)   // Darker urban water
-                : new THREE.Color(0.05, 0.15, 0.4);  // Standard
+                ? new THREE.Color(0.03, 0.1, 0.3)
+                : new THREE.Color(0.05, 0.15, 0.4);
 
         const shallowColor = isIsland
-            ? new THREE.Color(0.05, 0.45, 0.65)     // Turquoise tropical
+            ? new THREE.Color(0.05, 0.45, 0.65)
+            : isCoastal
+                ? new THREE.Color(0.08, 0.42, 0.62)
             : isCity
-                ? new THREE.Color(0.08, 0.3, 0.5)    // Urban shallows
-                : new THREE.Color(0.1, 0.35, 0.6);   // Standard
+                ? new THREE.Color(0.08, 0.3, 0.5)
+                : new THREE.Color(0.1, 0.35, 0.6);
 
-        const opacity = isIsland ? 0.75 : 0.7;
+        const opacity = isIsland ? 0.75 : isCoastal ? 0.72 : 0.7;
 
         const waterMat = new THREE.ShaderMaterial({
             vertexShader: oceanVertexShader,
@@ -409,7 +427,7 @@ class ProceduralTerrain {
                 uWaterColorShallow: { value: shallowColor },
                 uOpacity: { value: opacity },
                 uWaterLevel: { value: this.waterLevel },
-                uWaveHeight: { value: isIsland ? 0.6 : isCity ? 0.2 : 0.4 }
+                uWaveHeight: { value: isIsland ? 0.6 : isCoastal ? 0.35 : isCity ? 0.2 : 0.4 }
             },
             transparent: true,
             depthWrite: false,
