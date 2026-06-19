@@ -17,13 +17,14 @@ const terrainVertexShader = `
     }
 `;
 
-// Fragment shader for terrain with height-based coloring
+// Fragment shader for terrain with height-based coloring + snow accumulation
 const terrainFragmentShader = `
     uniform vec3 uSunDir;
     uniform vec3 uSunColor;
     uniform vec3 uAmbientColor;
     uniform float uWaterLevel;
     uniform float uTime;
+    uniform float uSnowAccum; // 0.0 to 1.0 snow accumulation
 
     varying vec2 vUv;
     varying vec3 vWorldPos;
@@ -68,6 +69,30 @@ const terrainFragmentShader = `
             color += shimmer;
         }
 
+        // Snow accumulation effect - blend terrain color towards white
+        if (h >= uWaterLevel + 0.3 && uSnowAccum > 0.0) {
+            // Snow accumulates more on flat surfaces and lower elevations
+            float slope = 1.0 - abs(vNormal.y); // 0 = flat, 1 = vertical
+            float flatness = 1.0 - slope * 2.0;
+            flatness = clamp(flatness, 0.0, 1.0);
+
+            // More snow on flat ground, less on steep slopes
+            float snowBlend = uSnowAccum * flatness;
+
+            // Reduce snow on very high peaks (wind blows it off)
+            float heightFactor = 1.0;
+            if (h > 8.0) {
+                heightFactor = 1.0 - (h - 8.0) * 0.05;
+            }
+
+            snowBlend *= clamp(heightFactor, 0.3, 1.0);
+
+            // Snow color with slight variation
+            vec3 snowColor = vec3(0.92, 0.94, 0.98);
+
+            color = mix(color, snowColor, clamp(snowBlend, 0.0, 1.0));
+        }
+
         // Simple lighting
         float diff = max(dot(vNormal, uSunDir), 0.0);
         float wrap = max(dot(vNormal, uSunDir) * 0.5 + 0.5, 0.0);
@@ -77,6 +102,141 @@ const terrainFragmentShader = `
         gl_FragColor = vec4(lit, 1.0);
     }
 `;
+
+// ==========================================
+// Ocean shader - animated waves, foam, caustics
+// ==========================================
+const oceanVertexShader = `
+    uniform float uTime;
+    uniform float uWaveHeight;
+
+    varying vec2 vUv;
+    varying vec3 vWorldPos;
+    varying vec3 vNormal;
+    varying float vWaveHeight;
+
+    // Simple noise for wave shape
+    vec3 mod289(vec3 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
+    vec2 mod289(vec2 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
+    vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
+
+    float snoise(vec2 v) {
+        const vec4 C = vec4(0.211324865405187, 0.366025403784439,
+                           -0.577350269189626, 0.024390243902439);
+        vec2 i  = floor(v + dot(v, C.yy));
+        vec2 x0 = v -   i + dot(i, C.xx);
+        vec2 i1;
+        i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+        vec4 x12 = x0.xyxy + C.xxzz;
+        x12.xy -= i1;
+        i = mod289(i);
+        vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0))
+                + i.x + vec3(0.0, i1.x, 1.0));
+        vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy),
+                dot(x12.zw,x12.zw)), 0.0);
+        m = m*m;
+        m = m*m;
+        vec3 x = 2.0 * fract(p * C.www) - 1.0;
+        vec3 h = abs(x) - 0.5;
+        vec3 ox = floor(x + 0.5);
+        vec3 a0 = x - ox;
+        m *= 1.79284291400159 - 0.85373472095314 * (a0*a0+h*h);
+        vec3 g;
+        g.x  = a0.x  * x0.x  + h.x  * x0.y;
+        g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+        return 130.0 * dot(m, g);
+    }
+
+    void main() {
+        vUv = uv;
+        vec3 pos = position;
+
+        // Multi-octave wave displacement
+        float wave = 0.0;
+        wave += snoise(pos.xz * 0.08 + uTime * 0.3) * 0.4;
+        wave += snoise(pos.xz * 0.15 - uTime * 0.2) * 0.2;
+        wave += snoise(pos.xz * 0.4 + uTime * 0.5) * 0.08;
+        wave += snoise(pos.xz * 0.8 - uTime * 0.3) * 0.03;
+
+        pos.y += wave * uWaveHeight;
+        vWaveHeight = wave;
+
+        // Approximate normal from wave derivatives
+        float eps = 0.5;
+        float hx = snoise((position.xz + vec2(eps, 0.0)) * 0.08 + uTime * 0.3) * 0.4
+                  + snoise((position.xz + vec2(eps, 0.0)) * 0.15 - uTime * 0.2) * 0.2;
+        float hz = snoise((position.xz + vec2(0.0, eps)) * 0.08 + uTime * 0.3) * 0.4
+                  + snoise((position.xz + vec2(0.0, eps)) * 0.15 - uTime * 0.2) * 0.2;
+
+        vec3 tangent = normalize(vec3(eps, hx * uWaveHeight - wave * uWaveHeight, 0.0));
+        vec3 bitangent = normalize(vec3(0.0, hz * uWaveHeight - wave * uWaveHeight, eps));
+        vNormal = normalize(cross(bitangent, tangent));
+
+        vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    }
+`;
+
+const oceanFragmentShader = `
+    uniform float uTime;
+    uniform vec3 uSunDir;
+    uniform vec3 uSunColor;
+    uniform vec3 uWaterColorDeep;
+    uniform vec3 uWaterColorShallow;
+    uniform float uOpacity;
+    uniform float uWaterLevel;
+
+    varying vec2 vUv;
+    varying vec3 vWorldPos;
+    varying vec3 vNormal;
+    varying float vWaveHeight;
+
+    void main() {
+        vec3 viewDir = normalize(cameraPosition - vWorldPos);
+        vec3 normal = normalize(vNormal);
+
+        // Fresnel effect - more reflective at grazing angles
+        float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 4.0);
+        fresnel = 0.02 + 0.98 * fresnel;
+
+        // Sky reflection color
+        vec3 skyColor = vec3(0.4, 0.6, 0.9);
+
+        // Specular highlight from sun
+        vec3 halfVec = normalize(uSunDir + viewDir);
+        float spec = pow(max(dot(normal, halfVec), 0.0), 256.0);
+        float specBroad = pow(max(dot(normal, halfVec), 0.0), 32.0);
+
+        // Water base color - depth variation
+        float depthFactor = smoothstep(-2.0, 0.5, vWorldPos.y - uWaterLevel + 1.0);
+        vec3 waterColor = mix(uWaterColorDeep, uWaterColorShallow, depthFactor);
+
+        // Caustics-like pattern (subtle bright spots)
+        float caustic1 = sin(vWorldPos.x * 2.0 + uTime * 0.8) * cos(vWorldPos.z * 2.5 + uTime * 0.6);
+        float caustic2 = sin(vWorldPos.x * 3.5 - uTime * 0.5) * cos(vWorldPos.z * 1.8 + uTime * 0.9);
+        float caustics = (caustic1 + caustic2) * 0.02 + 0.02;
+        caustics = max(caustics, 0.0);
+
+        // Foam on wave crests
+        float foam = smoothstep(0.25, 0.5, vWaveHeight);
+        // Foam also near edges
+        vec3 foamColor = vec3(0.85, 0.9, 0.95);
+
+        // Combine
+        vec3 color = mix(waterColor, skyColor, fresnel);
+        color += uSunColor * spec * 2.0; // Sharp specular
+        color += uSunColor * specBroad * 0.15; // Broad specular
+        color += caustics * waterColor * 2.0;
+        color = mix(color, foamColor, foam * 0.6);
+
+        // Diffuse lighting on water
+        float diff = max(dot(normal, uSunDir), 0.0) * 0.3 + 0.7;
+        color *= diff;
+
+        gl_FragColor = vec4(color, uOpacity + foam * 0.3);
+    }
+`;
+
 
 class ProceduralTerrain {
     constructor(scene, options = {}) {
@@ -90,6 +250,7 @@ class ProceduralTerrain {
 
         this.mesh = null;
         this.waterMesh = null;
+        this.snowAccum = 0; // Current snow accumulation level
 
         this.material = new THREE.ShaderMaterial({
             vertexShader: terrainVertexShader,
@@ -99,7 +260,8 @@ class ProceduralTerrain {
                 uSunColor: { value: new THREE.Color(1.0, 0.95, 0.8) },
                 uAmbientColor: { value: new THREE.Color(0.3, 0.35, 0.5) },
                 uWaterLevel: { value: this.waterLevel },
-                uTime: { value: 0 }
+                uTime: { value: 0 },
+                uSnowAccum: { value: 0 }
             }
         });
 
@@ -138,7 +300,6 @@ class ProceduralTerrain {
                 break;
 
             case 'city':
-                // Very flat - roads need a level surface
                 h = this.noise.fbm(x * scale * 0.2, z * scale * 0.2, 2) * 0.3;
                 h = Math.max(h, 0);
                 break;
@@ -150,7 +311,6 @@ class ProceduralTerrain {
         return h;
     }
 
-    // Get terrain slope at a point (returns gradient vector)
     getGradient(x, z) {
         const delta = 0.5;
         const hL = this.getHeight(x - delta, z);
@@ -209,15 +369,53 @@ class ProceduralTerrain {
         this.mesh.receiveShadow = true;
         this.scene.add(this.mesh);
 
-        // Water plane
-        const waterGeo = new THREE.PlaneGeometry(this.size * 2, this.size * 2);
+        // Ocean with GLSL shader
+        this.createOcean();
+    }
+
+    createOcean() {
+        const waterSize = this.size * 2;
+        const waterRes = 128; // Enough resolution for waves
+
+        const waterGeo = new THREE.PlaneGeometry(waterSize, waterSize, waterRes, waterRes);
         waterGeo.rotateX(-Math.PI / 2);
-        const waterMat = new THREE.MeshPhongMaterial({
-            color: 0x1a6ea0,
+
+        // Island terrain gets different water colors
+        const isIsland = this.terrainType === 'islands';
+        const isCity = this.terrainType === 'city' || this.terrainType === 'suburban';
+
+        const deepColor = isIsland
+            ? new THREE.Color(0.02, 0.12, 0.35)   // Deep tropical
+            : isCity
+                ? new THREE.Color(0.03, 0.1, 0.3)   // Darker urban water
+                : new THREE.Color(0.05, 0.15, 0.4);  // Standard
+
+        const shallowColor = isIsland
+            ? new THREE.Color(0.05, 0.45, 0.65)     // Turquoise tropical
+            : isCity
+                ? new THREE.Color(0.08, 0.3, 0.5)    // Urban shallows
+                : new THREE.Color(0.1, 0.35, 0.6);   // Standard
+
+        const opacity = isIsland ? 0.75 : 0.7;
+
+        const waterMat = new THREE.ShaderMaterial({
+            vertexShader: oceanVertexShader,
+            fragmentShader: oceanFragmentShader,
+            uniforms: {
+                uTime: { value: 0 },
+                uSunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
+                uSunColor: { value: new THREE.Color(1.0, 0.95, 0.8) },
+                uWaterColorDeep: { value: deepColor },
+                uWaterColorShallow: { value: shallowColor },
+                uOpacity: { value: opacity },
+                uWaterLevel: { value: this.waterLevel },
+                uWaveHeight: { value: isIsland ? 0.6 : isCity ? 0.2 : 0.4 }
+            },
             transparent: true,
-            opacity: 0.6,
-            shininess: 100,
+            depthWrite: false,
+            side: THREE.DoubleSide
         });
+
         this.waterMesh = new THREE.Mesh(waterGeo, waterMat);
         this.waterMesh.position.y = this.waterLevel - 0.1;
         this.scene.add(this.waterMesh);
@@ -233,14 +431,37 @@ class ProceduralTerrain {
 
     update(time) {
         this.material.uniforms.uTime.value = time;
+        this.material.uniforms.uSnowAccum.value = this.snowAccum;
+
+        // Update ocean
+        if (this.waterMesh) {
+            this.waterMesh.material.uniforms.uTime.value = time;
+        }
+    }
+
+    // Update snow accumulation
+    updateSnowAccum(isSnowing, deltaTime) {
+        if (isSnowing) {
+            // Accumulate over ~30 seconds
+            this.snowAccum = Math.min(1.0, this.snowAccum + deltaTime * 0.033);
+        } else {
+            // Melt over ~15 seconds
+            this.snowAccum = Math.max(0.0, this.snowAccum - deltaTime * 0.067);
+        }
     }
 
     setSunDirection(dir) {
         this.material.uniforms.uSunDir.value.copy(dir).normalize();
+        if (this.waterMesh) {
+            this.waterMesh.material.uniforms.uSunDir.value.copy(dir).normalize();
+        }
     }
 
     setSunColor(color) {
         this.material.uniforms.uSunColor.value.copy(color);
+        if (this.waterMesh) {
+            this.waterMesh.material.uniforms.uSunColor.value.copy(color);
+        }
     }
 
     setAmbientColor(color) {
@@ -274,10 +495,7 @@ class ProceduralTerrain {
 
         if (candidates.length === 0) return null;
 
-        // Sort by flatness (lower slope = better)
         candidates.sort((a, b) => a.slope - b.slope);
-
-        // Return a random pick from the top candidates for variety
         const topN = Math.min(5, candidates.length);
         return candidates[Math.floor(Math.random() * topN)];
     }

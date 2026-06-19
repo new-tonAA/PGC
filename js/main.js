@@ -5,6 +5,7 @@ import { ProceduralHouse, SETTLEMENT_TYPES } from './house.js';
 import { FireSystem } from './fire.js';
 import { WeatherSystem } from './weather.js';
 import { CitySystem } from './city.js';
+import { VegetationSystem } from './vegetation.js';
 import { SimplexNoise } from './noise.js';
 
 class PCGWorld {
@@ -18,6 +19,7 @@ class PCGWorld {
         this.fire = null;
         this.weather = null;
         this.city = null;
+        this.vegetation = null;
         this.clock = new THREE.Clock();
 
         this.state = {
@@ -152,7 +154,6 @@ class PCGWorld {
         if (this.state.lightsOn) {
             const nightFactor = (time < 6 || time > 18) ? 1.0 :
                 (time < 8 ? (8 - time) / 2 : (time > 17 ? (time - 17) / 1 : 0));
-            // Houses
             if (this.houses) {
                 for (const house of this.houses.houses) {
                     if (house.userData.interiorLight) {
@@ -160,7 +161,6 @@ class PCGWorld {
                     }
                 }
             }
-            // City buildings
             if (this.city) {
                 for (const bld of this.city.cityBuildings) {
                     if (bld.userData.interiorLight) {
@@ -172,7 +172,6 @@ class PCGWorld {
                         }
                     }
                 }
-                // Street lights intensity
                 for (const sl of this.city.streetLightLamps) {
                     sl.pointLight.intensity = nightFactor * 1.2;
                     sl.lampMat.opacity = nightFactor > 0.3 ? 0.9 : 0.3;
@@ -182,7 +181,6 @@ class PCGWorld {
         }
     }
 
-    // Whether the current combo needs the city system
     needsCitySystem() {
         return this.state.settlementType === 'city' ||
                this.state.terrainType === 'islands' ||
@@ -197,6 +195,7 @@ class PCGWorld {
         }
         if (this.fire) this.fire.clear();
         if (this.city) this.city.clear();
+        if (this.vegetation) this.vegetation.clear();
 
         // Terrain
         this.terrain = new ProceduralTerrain(this.scene, {
@@ -206,20 +205,19 @@ class PCGWorld {
             type: this.state.terrainType
         });
 
-        // City system (for city/islands)
+        // City system
         if (!this.city) {
             this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
         }
 
         if (this.needsCitySystem()) {
             this.city.generate(this.terrain, this.state.seed);
-            // Apply lights state
             if (this.state.lightsOn) {
                 this.city.setLights(true);
             }
         }
 
-        // Houses (only for non-city settlements, city uses its own buildings)
+        // Houses
         if (!this.houses) {
             this.houses = new ProceduralHouse(this.scene, new SimplexNoise(this.state.seed));
         } else {
@@ -228,7 +226,6 @@ class PCGWorld {
 
         if (!this.needsCitySystem() || this.state.terrainType === 'islands') {
             this.houses.settlementType = this.state.settlementType;
-            // Islands: fewer houses (city system handles the town)
             const count = this.state.terrainType === 'islands'
                 ? Math.min(this.state.houseCount, 5)
                 : this.state.houseCount;
@@ -252,8 +249,34 @@ class PCGWorld {
         }
         this.weather.setWeather(this.state.weather);
 
-        // Trees
-        this.generateTrees();
+        // Vegetation (new system)
+        if (!this.vegetation) {
+            this.vegetation = new VegetationSystem(this.scene, new SimplexNoise(this.state.seed));
+        } else {
+            this.vegetation.noise = new SimplexNoise(this.state.seed);
+        }
+
+        // Gather house positions for vegetation avoidance
+        const housePositions = this.houses.houses.map(h => ({
+            x: h.position.x,
+            z: h.position.z,
+            radius: h.userData.boundingRadius || 3
+        }));
+
+        // Get road positions from city system for avoidance
+        const roadPositions = [];
+        if (this.needsCitySystem() && this.city.intersections) {
+            for (const inter of this.city.intersections) {
+                roadPositions.push({ x: inter.x, z: inter.z });
+            }
+        }
+
+        this.vegetation.generate(this.terrain, {
+            seed: this.state.seed,
+            settlementType: this.state.settlementType,
+            housePositions,
+            roadPositions
+        });
 
         this.updateTimeOfDay(this.state.timeOfDay);
 
@@ -267,91 +290,6 @@ class PCGWorld {
         }
     }
 
-    generateTrees() {
-        if (this.treeGroup) {
-            this.scene.remove(this.treeGroup);
-        }
-        this.treeGroup = new THREE.Group();
-
-        let treeCount;
-        const isCityTerrain = this.state.terrainType === 'city' || this.state.settlementType === 'city';
-        if (isCityTerrain) treeCount = 8;
-        else if (this.state.terrainType === 'islands') treeCount = 30;
-        else if (this.state.settlementType === 'suburban') treeCount = 40;
-        else treeCount = 60;
-
-        for (let i = 0; i < treeCount; i++) {
-            const angle = Math.random() * Math.PI * 2;
-            const dist = 5 + Math.random() * 30;
-            const x = Math.cos(angle) * dist;
-            const z = Math.sin(angle) * dist;
-
-            const y = this.terrain.getHeight(x, z);
-            if (y < this.terrain.waterLevel + 1.0 || y > 7) continue;
-
-            const yN = this.terrain.getHeight(x + 0.5, z);
-            const yS = this.terrain.getHeight(x - 0.5, z);
-            const slope = Math.abs(y - yN) + Math.abs(y - yS);
-            if (slope > 1.5) continue;
-
-            let tooClose = false;
-            for (const house of this.houses.houses) {
-                const dx = x - house.position.x;
-                const dz = z - house.position.z;
-                if (Math.sqrt(dx * dx + dz * dz) < 3.0) { tooClose = true; break; }
-            }
-            if (tooClose) continue;
-
-            const treeType = Math.random();
-
-            if (treeType < 0.5) {
-                const trunkH = 1.0 + Math.random() * 0.5;
-                const trunkGeo = new THREE.CylinderGeometry(0.08, 0.12, trunkH, 6);
-                const trunkMat = new THREE.MeshPhongMaterial({ color: 0x4a3520, flatShading: true });
-                const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-                trunk.position.set(x, y + trunkH / 2, z);
-                trunk.castShadow = true;
-                this.treeGroup.add(trunk);
-
-                const layers = 2 + Math.floor(Math.random() * 2);
-                for (let l = 0; l < layers; l++) {
-                    const coneH = 0.8 + Math.random() * 0.4;
-                    const coneR = (0.5 - l * 0.1) * (0.8 + Math.random() * 0.4);
-                    const coneGeo = new THREE.ConeGeometry(coneR, coneH, 6);
-                    const shade = 0.15 + Math.random() * 0.1;
-                    const coneMat = new THREE.MeshPhongMaterial({
-                        color: new THREE.Color(shade * 0.4, shade, shade * 0.3), flatShading: true
-                    });
-                    const cone = new THREE.Mesh(coneGeo, coneMat);
-                    cone.position.set(x, y + trunkH + l * 0.5 + coneH / 2, z);
-                    cone.castShadow = true;
-                    this.treeGroup.add(cone);
-                }
-            } else {
-                const trunkH = 1.5 + Math.random() * 1.0;
-                const trunkGeo = new THREE.CylinderGeometry(0.1, 0.15, trunkH, 6);
-                const trunkMat = new THREE.MeshPhongMaterial({ color: 0x5a4030, flatShading: true });
-                const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-                trunk.position.set(x, y + trunkH / 2, z);
-                trunk.castShadow = true;
-                this.treeGroup.add(trunk);
-
-                const crownR = 0.8 + Math.random() * 0.6;
-                const crownGeo = new THREE.SphereGeometry(crownR, 7, 5);
-                const shade = 0.18 + Math.random() * 0.12;
-                const crownMat = new THREE.MeshPhongMaterial({
-                    color: new THREE.Color(shade * 0.5, shade, shade * 0.3), flatShading: true
-                });
-                const crown = new THREE.Mesh(crownGeo, crownMat);
-                crown.position.set(x, y + trunkH + crownR * 0.5, z);
-                crown.castShadow = true;
-                this.treeGroup.add(crown);
-            }
-        }
-
-        this.scene.add(this.treeGroup);
-    }
-
     setupUI() {
         document.querySelectorAll('[data-terrain]').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -359,7 +297,6 @@ class PCGWorld {
                 btn.classList.add('active');
                 this.state.terrainType = btn.dataset.terrain;
 
-                // Auto-switch settlement type for city/island terrains
                 if (btn.dataset.terrain === 'city') {
                     this.state.settlementType = 'city';
                     document.querySelectorAll('[data-settlement]').forEach(b => b.classList.remove('active'));
@@ -456,6 +393,7 @@ class PCGWorld {
     animate() {
         requestAnimationFrame(() => this.animate());
 
+        const deltaTime = this.clock.getDelta();
         const time = this.clock.getElapsedTime();
 
         this.controls.update();
@@ -464,7 +402,11 @@ class PCGWorld {
         this.weather.update(time);
         this.city.update(time);
 
-        this.renderer.render(this.scene, this.camera);
+        // Snow accumulation
+        const isSnowing = this.state.weather === 'snow';
+        if (this.terrain) {
+            this.terrain.updateSnowAccum(isSnowing, deltaTime);
+        }
     }
 }
 
