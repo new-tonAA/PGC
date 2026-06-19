@@ -402,11 +402,12 @@ class PCGWorld {
         this.weather.update(time);
         this.city.update(time);
 
-        // Snow accumulation
         const isSnowing = this.state.weather === 'snow';
         if (this.terrain) {
             this.terrain.updateSnowAccum(isSnowing, deltaTime);
         }
+
+        this.renderer.render(this.scene, this.camera);
     }
 }
 
