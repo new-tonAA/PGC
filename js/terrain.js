@@ -312,8 +312,8 @@ class ProceduralTerrain {
                 break;
 
             case 'city':
-                h = this.noise.fbm(x * scale * 0.2, z * scale * 0.2, 2) * 0.3;
-                h = Math.max(h, 0);
+                // Flat terrain so roads are always above surface
+                h = 0;
                 break;
 
             case 'coastal':

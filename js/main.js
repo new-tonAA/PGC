@@ -198,7 +198,7 @@ class PCGWorld {
             if (!this.city) {
                 this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
             }
-            this.city.generate(this.terrain, this.state.seed, this.state.vehicleCount);
+            this.city.generate(this.terrain, this.state.seed, this.state.vehicleCount, this.state.houseCount);
             if (this.state.lightsOn) {
                 this.city.setLights(true);
             }
@@ -289,7 +289,7 @@ class PCGWorld {
                 fireBtn.textContent = 'FIRE';
             }
             this.generateWorld();
-        }, 300);
+        }, 150);
     }
 
     setupUI() {
