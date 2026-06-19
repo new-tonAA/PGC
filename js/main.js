@@ -50,7 +50,7 @@ class PCGWorld {
             this.renderer = new THREE.WebGLRenderer({ antialias: true });
         } catch (e) {
             const loading = document.getElementById('loading');
-            loading.innerHTML = '<div style="color:#f44;font-size:12px;text-align:center;padding:20px;font-family:Consolas,monospace;">WebGL 初始化失败: ' + e.message + '</div>';
+            loading.innerHTML = '<div style="color:#f44;font-size:12px;text-align:center;padding:20px;font-family:Consolas,monospace;">WebGL init failed: ' + e.message + '</div>';
             return;
         }
         this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -214,8 +214,8 @@ class PCGWorld {
 
         // Terrain
         this.terrain = new ProceduralTerrain(this.scene, {
-            size: 80,
-            resolution: 200,
+            size: 60,
+            resolution: 180,
             seed: this.state.seed,
             type: this.state.terrainType
         });
@@ -334,7 +334,7 @@ class PCGWorld {
         fireBtn.addEventListener('click', () => {
             this.state.fireActive = !this.state.fireActive;
             fireBtn.classList.toggle('active', this.state.fireActive);
-            fireBtn.textContent = this.state.fireActive ? 'OFF' : 'ON';
+            fireBtn.textContent = this.state.fireActive ? 'FIRE ON' : 'FIRE';
             if (this.state.fireActive) {
                 this.fire.placeFiresAtHouses(this.houses.houses);
                 const centerSpot = this.terrain.findFlatSpot(0, 0, 10);
@@ -350,7 +350,7 @@ class PCGWorld {
         lightBtn.addEventListener('click', () => {
             this.state.lightsOn = !this.state.lightsOn;
             lightBtn.classList.toggle('active', this.state.lightsOn);
-            lightBtn.textContent = this.state.lightsOn ? 'OFF' : 'ON';
+            lightBtn.textContent = this.state.lightsOn ? 'LIGHT ON' : 'LIGHT';
             this.houses.setInteriorLights(this.state.lightsOn);
             if (this.city) this.city.setLights(this.state.lightsOn);
         });
@@ -376,7 +376,7 @@ class PCGWorld {
             this.fire.clear();
             this.state.fireActive = false;
             fireBtn.classList.remove('active');
-            fireBtn.textContent = 'ON';
+            fireBtn.textContent = 'FIRE';
             this.generateWorld();
         });
     }

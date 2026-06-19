@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PCG World - 程序化内容生成</title>
+    <title>PCG World - Procedural Content Generation</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { overflow: hidden; background: #111; font-family: 'Consolas', 'Courier New', monospace; }
@@ -160,7 +160,7 @@
 <body>
     <div id="loading">
         <div class="spinner"></div>
-        <div>PCG World 加载中...</div>
+        <div>Loading PCG World...</div>
     </div>
 
     <div id="ui-panel">
@@ -168,38 +168,38 @@
         <div class="subtitle">Procedural Content Generation</div>
 
         <div class="control-group">
-            <label>地形类型</label>
+            <label>TERRAIN</label>
             <div class="btn-row">
-                <button class="btn active" data-terrain="plains">平原</button>
-                <button class="btn" data-terrain="mountains">山脉</button>
-                <button class="btn" data-terrain="islands">岛屿</button>
-                <button class="btn" data-terrain="coastal">海边</button>
-                <button class="btn" data-terrain="suburban">近郊</button>
-                <button class="btn" data-terrain="city">城市</button>
+                <button class="btn active" data-terrain="plains">PLAINS</button>
+                <button class="btn" data-terrain="mountains">MOUNTAINS</button>
+                <button class="btn" data-terrain="islands">ISLANDS</button>
+                <button class="btn" data-terrain="coastal">COASTAL</button>
+                <button class="btn" data-terrain="suburban">SUBURB</button>
+                <button class="btn" data-terrain="city">CITY</button>
             </div>
         </div>
 
         <div class="separator"></div>
 
         <div class="control-group">
-            <label>房屋数量 <span class="value" id="houseCountVal">8</span></label>
+            <label>HOUSES <span class="value" id="houseCountVal">8</span></label>
             <input type="range" id="houseCount" min="1" max="40" value="8">
         </div>
 
         <div class="separator"></div>
 
         <div class="control-group">
-            <label>天气</label>
+            <label>WEATHER</label>
             <div class="btn-row">
-                <button class="btn active" data-weather="clear">晴</button>
-                <button class="btn" data-weather="rain">雨</button>
-                <button class="btn" data-weather="snow">雪</button>
-                <button class="btn" data-weather="fog">雾</button>
+                <button class="btn active" data-weather="clear">CLEAR</button>
+                <button class="btn" data-weather="rain">RAIN</button>
+                <button class="btn" data-weather="snow">SNOW</button>
+                <button class="btn" data-weather="fog">FOG</button>
             </div>
         </div>
 
         <div class="control-group">
-            <label>特效</label>
+            <label>FX</label>
             <div class="btn-row">
                 <button class="btn-toggle" id="toggleFire">FIRE</button>
                 <button class="btn-toggle" id="toggleLights">LIGHT</button>
@@ -209,19 +209,19 @@
         <div class="separator"></div>
 
         <div class="control-group">
-            <label>时间 <span class="value" id="timeVal">12:00</span></label>
+            <label>TIME <span class="value" id="timeVal">12:00</span></label>
             <input type="range" id="timeSlider" min="0" max="24" value="12" step="0.5">
         </div>
 
         <div class="control-group">
-            <label>种子 <span class="value" id="seedVal">42</span></label>
+            <label>SEED <span class="value" id="seedVal">42</span></label>
             <input type="range" id="seedSlider" min="1" max="999" value="42">
         </div>
 
         <button class="btn-regen" id="regenerate">REGEN</button>
     </div>
 
-    <div id="info">鼠标左键旋转 · 右键平移 · 滚轮缩放</div>
+    <div id="info">LMB: Rotate · RMB: Pan · Scroll: Zoom</div>
 
     <script type="importmap">
     {
@@ -237,13 +237,13 @@
             console.error('JS Error:', e.message, e.filename, e.lineno);
             var loading = document.getElementById('loading');
             if (loading) {
-                loading.innerHTML = '<div style="color:#ff4444;font-size:14px;text-align:center;padding:20px;">加载失败，请按 F12 查看控制台报错<br><br>' + e.message + '</div>';
+                loading.innerHTML = '<div style="color:#ff4444;font-size:14px;text-align:center;padding:20px;">Load failed, press F12 for console<br><br>' + e.message + '</div>';
             }
         });
         setTimeout(function() {
             var loading = document.getElementById('loading');
             if (loading && loading.style.display !== 'none') {
-                loading.innerHTML = '<div style="color:#ffaa00;font-size:14px;text-align:center;padding:20px;">加载超时，请按 F12 查看控制台</div>';
+                loading.innerHTML = '<div style="color:#ffaa00;font-size:14px;text-align:center;padding:20px;">Load timeout, press F12 for console</div>';
             }
         }, 15000);
     </script>
