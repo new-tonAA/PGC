@@ -4,6 +4,7 @@ import { ProceduralTerrain } from './terrain.js';
 import { ProceduralHouse, SETTLEMENT_TYPES } from './house.js';
 import { FireSystem } from './fire.js';
 import { WeatherSystem } from './weather.js';
+import { CitySystem } from './city.js';
 import { SimplexNoise } from './noise.js';
 
 class PCGWorld {
@@ -16,9 +17,9 @@ class PCGWorld {
         this.houses = null;
         this.fire = null;
         this.weather = null;
+        this.city = null;
         this.clock = new THREE.Clock();
 
-        // State
         this.state = {
             terrainType: 'plains',
             settlementType: 'village',
@@ -36,17 +37,14 @@ class PCGWorld {
     }
 
     init() {
-        // Scene
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x87ceeb);
 
-        // Camera
         this.camera = new THREE.PerspectiveCamera(
             60, window.innerWidth / window.innerHeight, 0.1, 500
         );
         this.camera.position.set(25, 20, 25);
 
-        // Renderer
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -56,36 +54,28 @@ class PCGWorld {
         this.renderer.toneMappingExposure = 1.0;
         document.body.appendChild(this.renderer.domElement);
 
-        // Controls
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
         this.controls.maxPolarAngle = Math.PI / 2.1;
         this.controls.minDistance = 5;
-        this.controls.maxDistance = 100;
+        this.controls.maxDistance = 120;
         this.controls.target.set(0, 2, 0);
 
-        // Lighting
         this.setupLighting();
-
-        // Generate world
         this.generateWorld();
 
-        // Resize handler
         window.addEventListener('resize', () => this.onResize());
 
-        // Hide loading screen
         const loading = document.getElementById('loading');
         loading.style.opacity = '0';
         setTimeout(() => loading.style.display = 'none', 500);
     }
 
     setupLighting() {
-        // Ambient light
         this.ambientLight = new THREE.AmbientLight(0x6688aa, 0.5);
         this.scene.add(this.ambientLight);
 
-        // Sun directional light
         this.sunLight = new THREE.DirectionalLight(0xfff5e0, 1.2);
         this.sunLight.position.set(30, 40, 20);
         this.sunLight.castShadow = true;
@@ -99,25 +89,20 @@ class PCGWorld {
         this.sunLight.shadow.camera.bottom = -40;
         this.scene.add(this.sunLight);
 
-        // Hemisphere light for sky/ground
         this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x3a5f0b, 0.4);
         this.scene.add(this.hemiLight);
 
-        // Sky gradient (simple)
         this.updateTimeOfDay(this.state.timeOfDay);
     }
 
     updateTimeOfDay(time) {
-        // Sun position based on time
         const angle = ((time - 6) / 12) * Math.PI;
         const sunY = Math.sin(angle);
         const sunX = Math.cos(angle);
 
         this.sunLight.position.set(sunX * 40, Math.max(sunY * 40, 1), 20);
 
-        // Adjust lighting based on time
         if (time >= 6 && time <= 18) {
-            // Day
             const dayFactor = Math.sin(angle);
             const warmth = time < 10 ? 0.8 : (time > 16 ? 0.6 : 1.0);
 
@@ -126,13 +111,11 @@ class PCGWorld {
             this.ambientLight.intensity = 0.3 + dayFactor * 0.3;
             this.hemiLight.intensity = 0.3 + dayFactor * 0.3;
 
-            // Sky color
             const skyH = 0.58;
             const skyS = 0.5 + dayFactor * 0.3;
             const skyL = 0.3 + dayFactor * 0.4;
             this.scene.background.setHSL(skyH, skyS, skyL);
 
-            // Sun direction for terrain shader
             const sunDir = new THREE.Vector3(sunX, Math.max(sunY, 0.1), 0.3).normalize();
             if (this.terrain) {
                 this.terrain.setSunDirection(sunDir);
@@ -140,7 +123,6 @@ class PCGWorld {
                 this.terrain.setAmbientColor(this.ambientLight.color.clone().multiplyScalar(this.ambientLight.intensity));
             }
         } else {
-            // Night
             this.sunLight.intensity = 0.15;
             this.sunLight.color.setHSL(0.65, 0.4, 0.4);
             this.ambientLight.intensity = 0.15;
@@ -155,7 +137,6 @@ class PCGWorld {
             }
         }
 
-        // Sunset/sunrise tint
         if ((time >= 5 && time <= 7) || (time >= 17 && time <= 19)) {
             const sunsetFactor = time < 12
                 ? 1 - Math.abs(time - 6)
@@ -163,33 +144,59 @@ class PCGWorld {
             this.scene.background.lerpHSL(new THREE.Color(0xff6633), sunsetFactor * 0.3);
         }
 
-        // Tone mapping exposure
         this.renderer.toneMappingExposure = time >= 6 && time <= 18
             ? 0.8 + Math.sin(angle) * 0.4
             : 0.4;
 
-        // Auto-turn on interior lights at night
-        if (this.houses && this.state.lightsOn) {
-            const nightFactor = (time < 6 || time > 18) ? 1.0 : (time < 8 ? (8 - time) / 2 : (time > 17 ? (time - 17) / 1 : 0));
-            for (const house of this.houses.houses) {
-                if (house.userData.interiorLight) {
-                    house.userData.interiorLight.intensity = nightFactor * 2.0;
+        // Auto lights at night
+        if (this.state.lightsOn) {
+            const nightFactor = (time < 6 || time > 18) ? 1.0 :
+                (time < 8 ? (8 - time) / 2 : (time > 17 ? (time - 17) / 1 : 0));
+            // Houses
+            if (this.houses) {
+                for (const house of this.houses.houses) {
+                    if (house.userData.interiorLight) {
+                        house.userData.interiorLight.intensity = nightFactor * 2.0;
+                    }
+                }
+            }
+            // City buildings
+            if (this.city) {
+                for (const bld of this.city.cityBuildings) {
+                    if (bld.userData.interiorLight) {
+                        bld.userData.interiorLight.intensity = nightFactor * 2.0;
+                    }
+                    if (bld.userData.windowMeshes) {
+                        for (const w of bld.userData.windowMeshes) {
+                            w.material.emissiveIntensity = nightFactor * 0.6;
+                        }
+                    }
+                }
+                // Street lights intensity
+                for (const sl of this.city.streetLightLamps) {
+                    sl.pointLight.intensity = nightFactor * 1.2;
+                    sl.lampMat.opacity = nightFactor > 0.3 ? 0.9 : 0.3;
+                    sl.lampMat.color.set(nightFactor > 0.3 ? 0xffeecc : 0x888888);
                 }
             }
         }
     }
 
+    // Whether the current combo needs the city system
+    needsCitySystem() {
+        return this.state.settlementType === 'city' ||
+               this.state.terrainType === 'islands' ||
+               this.state.terrainType === 'city';
+    }
+
     generateWorld() {
-        // Clean up old terrain/water
+        // Cleanup
         if (this.terrain) {
             if (this.terrain.mesh) this.scene.remove(this.terrain.mesh);
             if (this.terrain.waterMesh) this.scene.remove(this.terrain.waterMesh);
         }
-
-        // Clean up old fire extra objects (ring, logs)
-        if (this.fire) {
-            this.fire.clear();
-        }
+        if (this.fire) this.fire.clear();
+        if (this.city) this.city.clear();
 
         // Terrain
         this.terrain = new ProceduralTerrain(this.scene, {
@@ -199,18 +206,39 @@ class PCGWorld {
             type: this.state.terrainType
         });
 
-        // Houses
+        // City system (for city/islands)
+        if (!this.city) {
+            this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
+        }
+
+        if (this.needsCitySystem()) {
+            this.city.generate(this.terrain, this.state.seed);
+            // Apply lights state
+            if (this.state.lightsOn) {
+                this.city.setLights(true);
+            }
+        }
+
+        // Houses (only for non-city settlements, city uses its own buildings)
         if (!this.houses) {
             this.houses = new ProceduralHouse(this.scene, new SimplexNoise(this.state.seed));
         } else {
             this.houses.noise = new SimplexNoise(this.state.seed);
         }
-        this.houses.settlementType = this.state.settlementType;
-        this.houses.generateMultiple(this.terrain, this.state.houseCount);
 
-        // Apply interior lights state
-        if (this.state.lightsOn) {
-            this.houses.setInteriorLights(true);
+        if (!this.needsCitySystem() || this.state.terrainType === 'islands') {
+            this.houses.settlementType = this.state.settlementType;
+            // Islands: fewer houses (city system handles the town)
+            const count = this.state.terrainType === 'islands'
+                ? Math.min(this.state.houseCount, 5)
+                : this.state.houseCount;
+            this.houses.generateMultiple(this.terrain, count);
+
+            if (this.state.lightsOn) {
+                this.houses.setInteriorLights(true);
+            }
+        } else {
+            this.houses.clear();
         }
 
         // Fire system
@@ -218,19 +246,18 @@ class PCGWorld {
             this.fire = new FireSystem(this.scene);
         }
 
-        // Weather system
+        // Weather
         if (!this.weather) {
             this.weather = new WeatherSystem(this.scene, this.camera);
         }
         this.weather.setWeather(this.state.weather);
 
-        // Add trees (density depends on settlement type)
+        // Trees
         this.generateTrees();
 
-        // Apply time of day
         this.updateTimeOfDay(this.state.timeOfDay);
 
-        // If fire was active, re-place
+        // Fire
         if (this.state.fireActive) {
             this.fire.placeFiresAtHouses(this.houses.houses);
             const centerSpot = this.terrain.findFlatSpot(0, 0, 10);
@@ -241,19 +268,17 @@ class PCGWorld {
     }
 
     generateTrees() {
-        // Remove old trees
         if (this.treeGroup) {
             this.scene.remove(this.treeGroup);
         }
         this.treeGroup = new THREE.Group();
 
-        // Tree count depends on settlement type (cities have fewer trees)
         let treeCount;
-        switch (this.state.settlementType) {
-            case 'city': treeCount = 15; break;
-            case 'suburban': treeCount = 40; break;
-            default: treeCount = 60;
-        }
+        const isCityTerrain = this.state.terrainType === 'city' || this.state.settlementType === 'city';
+        if (isCityTerrain) treeCount = 8;
+        else if (this.state.terrainType === 'islands') treeCount = 30;
+        else if (this.state.settlementType === 'suburban') treeCount = 40;
+        else treeCount = 60;
 
         for (let i = 0; i < treeCount; i++) {
             const angle = Math.random() * Math.PI * 2;
@@ -262,32 +287,24 @@ class PCGWorld {
             const z = Math.sin(angle) * dist;
 
             const y = this.terrain.getHeight(x, z);
-
-            // Only place trees above water on grass
             if (y < this.terrain.waterLevel + 1.0 || y > 7) continue;
 
-            // Check slope
             const yN = this.terrain.getHeight(x + 0.5, z);
             const yS = this.terrain.getHeight(x - 0.5, z);
             const slope = Math.abs(y - yN) + Math.abs(y - yS);
             if (slope > 1.5) continue;
 
-            // Don't place too close to houses
             let tooClose = false;
             for (const house of this.houses.houses) {
                 const dx = x - house.position.x;
                 const dz = z - house.position.z;
-                if (Math.sqrt(dx * dx + dz * dz) < 3.0) {
-                    tooClose = true;
-                    break;
-                }
+                if (Math.sqrt(dx * dx + dz * dz) < 3.0) { tooClose = true; break; }
             }
             if (tooClose) continue;
 
             const treeType = Math.random();
 
             if (treeType < 0.5) {
-                // Pine tree
                 const trunkH = 1.0 + Math.random() * 0.5;
                 const trunkGeo = new THREE.CylinderGeometry(0.08, 0.12, trunkH, 6);
                 const trunkMat = new THREE.MeshPhongMaterial({ color: 0x4a3520, flatShading: true });
@@ -303,8 +320,7 @@ class PCGWorld {
                     const coneGeo = new THREE.ConeGeometry(coneR, coneH, 6);
                     const shade = 0.15 + Math.random() * 0.1;
                     const coneMat = new THREE.MeshPhongMaterial({
-                        color: new THREE.Color(shade * 0.4, shade, shade * 0.3),
-                        flatShading: true
+                        color: new THREE.Color(shade * 0.4, shade, shade * 0.3), flatShading: true
                     });
                     const cone = new THREE.Mesh(coneGeo, coneMat);
                     cone.position.set(x, y + trunkH + l * 0.5 + coneH / 2, z);
@@ -312,7 +328,6 @@ class PCGWorld {
                     this.treeGroup.add(cone);
                 }
             } else {
-                // Round tree
                 const trunkH = 1.5 + Math.random() * 1.0;
                 const trunkGeo = new THREE.CylinderGeometry(0.1, 0.15, trunkH, 6);
                 const trunkMat = new THREE.MeshPhongMaterial({ color: 0x5a4030, flatShading: true });
@@ -325,8 +340,7 @@ class PCGWorld {
                 const crownGeo = new THREE.SphereGeometry(crownR, 7, 5);
                 const shade = 0.18 + Math.random() * 0.12;
                 const crownMat = new THREE.MeshPhongMaterial({
-                    color: new THREE.Color(shade * 0.5, shade, shade * 0.3),
-                    flatShading: true
+                    color: new THREE.Color(shade * 0.5, shade, shade * 0.3), flatShading: true
                 });
                 const crown = new THREE.Mesh(crownGeo, crownMat);
                 crown.position.set(x, y + trunkH + crownR * 0.5, z);
@@ -339,16 +353,25 @@ class PCGWorld {
     }
 
     setupUI() {
-        // Terrain buttons
         document.querySelectorAll('[data-terrain]').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('[data-terrain]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this.state.terrainType = btn.dataset.terrain;
+
+                // Auto-switch settlement type for city/island terrains
+                if (btn.dataset.terrain === 'city') {
+                    this.state.settlementType = 'city';
+                    document.querySelectorAll('[data-settlement]').forEach(b => b.classList.remove('active'));
+                    document.querySelector('[data-settlement="city"]').classList.add('active');
+                } else if (btn.dataset.terrain === 'islands') {
+                    this.state.settlementType = 'village';
+                    document.querySelectorAll('[data-settlement]').forEach(b => b.classList.remove('active'));
+                    document.querySelector('[data-settlement="village"]').classList.add('active');
+                }
             });
         });
 
-        // Settlement buttons
         document.querySelectorAll('[data-settlement]').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('[data-settlement]').forEach(b => b.classList.remove('active'));
@@ -357,7 +380,6 @@ class PCGWorld {
             });
         });
 
-        // Weather buttons
         document.querySelectorAll('[data-weather]').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('[data-weather]').forEach(b => b.classList.remove('active'));
@@ -367,7 +389,6 @@ class PCGWorld {
             });
         });
 
-        // House count
         const houseSlider = document.getElementById('houseCount');
         const houseVal = document.getElementById('houseCountVal');
         houseSlider.addEventListener('input', () => {
@@ -375,13 +396,11 @@ class PCGWorld {
             houseVal.textContent = houseSlider.value;
         });
 
-        // Fire toggle
         const fireBtn = document.getElementById('toggleFire');
         fireBtn.addEventListener('click', () => {
             this.state.fireActive = !this.state.fireActive;
             fireBtn.classList.toggle('active', this.state.fireActive);
             fireBtn.textContent = this.state.fireActive ? '关闭火焰' : '开启火焰';
-
             if (this.state.fireActive) {
                 this.fire.placeFiresAtHouses(this.houses.houses);
                 const centerSpot = this.terrain.findFlatSpot(0, 0, 10);
@@ -393,16 +412,15 @@ class PCGWorld {
             }
         });
 
-        // Interior lights toggle
         const lightBtn = document.getElementById('toggleLights');
         lightBtn.addEventListener('click', () => {
             this.state.lightsOn = !this.state.lightsOn;
             lightBtn.classList.toggle('active', this.state.lightsOn);
             lightBtn.textContent = this.state.lightsOn ? '关闭灯光' : '开启灯光';
             this.houses.setInteriorLights(this.state.lightsOn);
+            this.city.setLights(this.state.lightsOn);
         });
 
-        // Time of day
         const timeSlider = document.getElementById('timeSlider');
         const timeVal = document.getElementById('timeVal');
         timeSlider.addEventListener('input', () => {
@@ -413,7 +431,6 @@ class PCGWorld {
             this.updateTimeOfDay(this.state.timeOfDay);
         });
 
-        // Seed
         const seedSlider = document.getElementById('seedSlider');
         const seedVal = document.getElementById('seedVal');
         seedSlider.addEventListener('input', () => {
@@ -421,7 +438,6 @@ class PCGWorld {
             seedVal.textContent = seedSlider.value;
         });
 
-        // Regenerate
         document.getElementById('regenerate').addEventListener('click', () => {
             this.fire.clear();
             this.state.fireActive = false;
@@ -446,10 +462,10 @@ class PCGWorld {
         this.terrain.update(time);
         this.fire.update(time);
         this.weather.update(time);
+        this.city.update(time);
 
         this.renderer.render(this.scene, this.camera);
     }
 }
 
-// Start the application
 new PCGWorld();

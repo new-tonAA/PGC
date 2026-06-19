@@ -132,16 +132,15 @@ class ProceduralTerrain {
                 break;
 
             case 'suburban':
-                // Gentle rolling hills, very flat
-                h = this.noise.fbm(x * scale * 0.5, z * scale * 0.5, 3) * 2.5;
-                h += this.noise.fbm(x * scale * 2, z * scale * 2, 2) * 0.3;
-                h = Math.max(h, -0.3);
+                h = this.noise.fbm(x * scale * 0.5, z * scale * 0.5, 3) * 1.5;
+                h += this.noise.fbm(x * scale * 2, z * scale * 2, 2) * 0.2;
+                h = Math.max(h, 0);
                 break;
 
             case 'city':
-                // Almost flat with very slight variation
-                h = this.noise.fbm(x * scale * 0.3, z * scale * 0.3, 2) * 1.0;
-                h = Math.max(h, -0.1);
+                // Very flat - roads need a level surface
+                h = this.noise.fbm(x * scale * 0.2, z * scale * 0.2, 2) * 0.3;
+                h = Math.max(h, 0);
                 break;
 
             default:
