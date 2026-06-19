@@ -25,12 +25,15 @@ class PCGWorld {
         this.state = {
             terrainType: 'plains',
             houseCount: 8,
+            vehicleCount: 5,
             weather: 'clear',
             fireActive: false,
             lightsOn: false,
             timeOfDay: 12,
             seed: 42
         };
+
+        this._regenTimer = null;
 
         this.init();
         this.setupUI();
@@ -154,36 +157,6 @@ class PCGWorld {
         this.renderer.toneMappingExposure = time >= 6 && time <= 18
             ? 0.8 + Math.sin(angle) * 0.4
             : 0.4;
-
-        // Auto lights at night
-        if (this.state.lightsOn) {
-            const nightFactor = (time < 6 || time > 18) ? 1.0 :
-                (time < 8 ? (8 - time) / 2 : (time > 17 ? (time - 17) / 1 : 0));
-            if (this.houses) {
-                for (const house of this.houses.houses) {
-                    if (house.userData.interiorLight) {
-                        house.userData.interiorLight.intensity = nightFactor * 2.0;
-                    }
-                }
-            }
-            if (this.city) {
-                for (const bld of this.city.cityBuildings) {
-                    if (bld.userData.interiorLight) {
-                        bld.userData.interiorLight.intensity = nightFactor * 2.0;
-                    }
-                    if (bld.userData.windowMeshes) {
-                        for (const w of bld.userData.windowMeshes) {
-                            w.material.emissiveIntensity = nightFactor * 0.6;
-                        }
-                    }
-                }
-                for (const sl of this.city.streetLightLamps) {
-                    sl.pointLight.intensity = nightFactor * 1.2;
-                    sl.lampMat.opacity = nightFactor > 0.3 ? 0.9 : 0.3;
-                    sl.lampMat.color.set(nightFactor > 0.3 ? 0xffeecc : 0x888888);
-                }
-            }
-        }
     }
 
     needsCitySystem() {
@@ -220,12 +193,12 @@ class PCGWorld {
             type: this.state.terrainType
         });
 
-        // City system for terrain types that need it
+        // City system
         if (this.needsCitySystem()) {
             if (!this.city) {
                 this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
             }
-            this.city.generate(this.terrain, this.state.seed);
+            this.city.generate(this.terrain, this.state.seed, this.state.vehicleCount);
             if (this.state.lightsOn) {
                 this.city.setLights(true);
             }
@@ -233,7 +206,7 @@ class PCGWorld {
             this.city.clear();
         }
 
-        // Houses - only for terrain types that don't have city system, or islands
+        // Houses
         if (!this.houses) {
             this.houses = new ProceduralHouse(this.scene, new SimplexNoise(this.state.seed));
         } else {
@@ -304,16 +277,33 @@ class PCGWorld {
         }
     }
 
+    // Debounced regeneration for sliders
+    scheduleRegen() {
+        if (this._regenTimer) clearTimeout(this._regenTimer);
+        this._regenTimer = setTimeout(() => {
+            this.fire.clear();
+            this.state.fireActive = false;
+            const fireBtn = document.getElementById('toggleFire');
+            if (fireBtn) {
+                fireBtn.classList.remove('active');
+                fireBtn.textContent = 'FIRE';
+            }
+            this.generateWorld();
+        }, 300);
+    }
+
     setupUI() {
-        // Terrain type buttons (single selection, no separate settlement)
+        // Terrain buttons - auto regenerate
         document.querySelectorAll('[data-terrain]').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('[data-terrain]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this.state.terrainType = btn.dataset.terrain;
+                this.scheduleRegen();
             });
         });
 
+        // Weather - live update (no full regen needed)
         document.querySelectorAll('[data-weather]').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('[data-weather]').forEach(b => b.classList.remove('active'));
@@ -323,13 +313,25 @@ class PCGWorld {
             });
         });
 
+        // House slider - auto regen
         const houseSlider = document.getElementById('houseCount');
         const houseVal = document.getElementById('houseCountVal');
         houseSlider.addEventListener('input', () => {
             this.state.houseCount = parseInt(houseSlider.value);
             houseVal.textContent = houseSlider.value;
+            this.scheduleRegen();
         });
 
+        // Vehicle slider - auto regen
+        const vehicleSlider = document.getElementById('vehicleCount');
+        const vehicleVal = document.getElementById('vehicleCountVal');
+        vehicleSlider.addEventListener('input', () => {
+            this.state.vehicleCount = parseInt(vehicleSlider.value);
+            vehicleVal.textContent = vehicleSlider.value;
+            this.scheduleRegen();
+        });
+
+        // Fire toggle - live update
         const fireBtn = document.getElementById('toggleFire');
         fireBtn.addEventListener('click', () => {
             this.state.fireActive = !this.state.fireActive;
@@ -346,6 +348,7 @@ class PCGWorld {
             }
         });
 
+        // Lights toggle - live update
         const lightBtn = document.getElementById('toggleLights');
         lightBtn.addEventListener('click', () => {
             this.state.lightsOn = !this.state.lightsOn;
@@ -355,6 +358,7 @@ class PCGWorld {
             if (this.city) this.city.setLights(this.state.lightsOn);
         });
 
+        // Time slider - live update (no regen)
         const timeSlider = document.getElementById('timeSlider');
         const timeVal = document.getElementById('timeVal');
         timeSlider.addEventListener('input', () => {
@@ -365,19 +369,13 @@ class PCGWorld {
             this.updateTimeOfDay(this.state.timeOfDay);
         });
 
+        // Seed slider - auto regen
         const seedSlider = document.getElementById('seedSlider');
         const seedVal = document.getElementById('seedVal');
         seedSlider.addEventListener('input', () => {
             this.state.seed = parseInt(seedSlider.value);
             seedVal.textContent = seedSlider.value;
-        });
-
-        document.getElementById('regenerate').addEventListener('click', () => {
-            this.fire.clear();
-            this.state.fireActive = false;
-            fireBtn.classList.remove('active');
-            fireBtn.textContent = 'FIRE';
-            this.generateWorld();
+            this.scheduleRegen();
         });
     }
 

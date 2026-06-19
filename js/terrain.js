@@ -69,6 +69,18 @@ const terrainFragmentShader = `
             color += shimmer;
         }
 
+        // Beach foam near shoreline
+        float shoreDist = h - uWaterLevel;
+        if (shoreDist > -0.3 && shoreDist < 0.8) {
+            float foamZone = smoothstep(-0.3, 0.1, shoreDist) * smoothstep(0.8, 0.3, shoreDist);
+            float foamPattern = sin(vWorldPos.x * 4.0 + uTime * 1.8) * cos(vWorldPos.z * 3.5 + uTime * 1.2);
+            foamPattern = foamPattern * 0.5 + 0.5;
+            float waveBreak = sin(uTime * 2.5 + vWorldPos.x * 0.8) * 0.5 + 0.5;
+            float foamStrength = foamZone * foamPattern * 0.5 * waveBreak;
+            vec3 foamColor = vec3(0.92, 0.96, 1.0);
+            color = mix(color, foamColor, clamp(foamStrength, 0.0, 0.6));
+        }
+
         // Snow accumulation effect - blend terrain color towards white
         if (h >= uWaterLevel + 0.3 && uSnowAccum > 0.0) {
             // Snow accumulates more on flat surfaces and lower elevations
@@ -305,13 +317,27 @@ class ProceduralTerrain {
                 break;
 
             case 'coastal':
-                // Coastal: flat land near water with gentle rise inland
-                const coastDist = (z + this.size * 0.2) / (this.size * 0.5);
-                const coastFalloff = Math.max(0, Math.min(1, coastDist));
-                h = this.noise.fbm(x * scale * 0.5, z * scale * 0.5, 3) * 2.0 * coastFalloff;
-                h += this.noise.fbm(x * scale * 2, z * scale * 2, 2) * 0.3 * coastFalloff;
-                // Lower the south side to create water edge
-                h -= (1 - coastFalloff) * 1.5;
+                // Clear land-sea split: north = land, south = sea, beach zone in middle
+                const sz = this.size;
+                const coastLineZ = sz * -0.15; // Shoreline at this z
+                const distFromCoast = z - coastLineZ;
+                const beachW = 5;
+
+                if (distFromCoast > beachW) {
+                    // Inland - gentle rolling terrain
+                    h = this.noise.fbm(x * scale * 0.5, z * scale * 0.5, 3) * 2.5;
+                    h += this.noise.fbm(x * scale * 2, z * scale * 2, 2) * 0.3;
+                } else if (distFromCoast > 0) {
+                    // Beach zone - smooth transition from waterLevel to land
+                    const t = distFromCoast / beachW;
+                    h = this.waterLevel + t * 1.5;
+                    h += this.noise.fbm(x * scale, z * scale, 2) * 0.2 * t;
+                } else {
+                    // Ocean floor - well below water
+                    const t = Math.min(1, Math.abs(distFromCoast) / (sz * 0.3));
+                    h = this.waterLevel - 0.5 - t * 3;
+                    h += this.noise.fbm(x * scale * 0.3, z * scale * 0.3, 2) * 0.2;
+                }
                 break;
 
             default:

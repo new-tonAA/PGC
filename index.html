@@ -99,21 +99,6 @@
             border-color: #f60;
             color: #fff;
         }
-        .btn-regen {
-            width: 100%;
-            padding: 3px;
-            background: #0a0;
-            border: 1px solid #0f0;
-            color: #fff;
-            border-radius: 1px;
-            cursor: pointer;
-            font-size: 10px;
-            font-family: 'Consolas', 'Courier New', monospace;
-            font-weight: bold;
-            margin-top: 4px;
-            transition: all 0.1s;
-        }
-        .btn-regen:hover { background: #0f0; }
 
         .separator {
             height: 1px;
@@ -186,6 +171,11 @@
             <input type="range" id="houseCount" min="1" max="40" value="8">
         </div>
 
+        <div class="control-group">
+            <label>VEHICLES <span class="value" id="vehicleCountVal">5</span></label>
+            <input type="range" id="vehicleCount" min="0" max="15" value="5">
+        </div>
+
         <div class="separator"></div>
 
         <div class="control-group">
@@ -218,7 +208,6 @@
             <input type="range" id="seedSlider" min="1" max="999" value="42">
         </div>
 
-        <button class="btn-regen" id="regenerate">REGEN</button>
     </div>
 
     <div id="info">LMB: Rotate · RMB: Pan · Scroll: Zoom</div>

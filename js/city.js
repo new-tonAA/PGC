@@ -1,16 +1,11 @@
 import * as THREE from 'three';
 import { SimplexNoise } from './noise.js';
 
-// =============================================
-// City System - Lightweight, minimal draw calls
-// =============================================
-
 const VEHICLE_COLORS = [
     0xcc2222, 0x2255cc, 0x22cc44, 0xcccc22, 0xffffff,
     0x222222, 0xcc8822, 0x888888
 ];
 
-// Shared geometries (created once, reused)
 let _sharedGeo = null;
 function getSharedGeos() {
     if (_sharedGeo) return _sharedGeo;
@@ -29,14 +24,16 @@ function getSharedGeos() {
         dockPlank: new THREE.BoxGeometry(2.0, 0.1, 0.8),
         boatHull: new THREE.BoxGeometry(1.5, 0.3, 0.5),
         boatCabin: new THREE.BoxGeometry(0.4, 0.3, 0.35),
+        signPole: new THREE.CylinderGeometry(0.04, 0.04, 2.5, 4),
+        signPlate: new THREE.BoxGeometry(0.6, 0.4, 0.05),
     };
     return _sharedGeo;
 }
 
-// Shared materials (no cloning!)
 const Mats = {
-    road: new THREE.MeshPhongMaterial({ color: 0x333338, shininess: 5 }),
-    roadInt: new THREE.MeshPhongMaterial({ color: 0x333338 }),
+    road: new THREE.MeshPhongMaterial({ color: 0x222228, shininess: 15 }),
+    roadLine: new THREE.MeshBasicMaterial({ color: 0xdddd44 }),
+    roadEdge: new THREE.MeshBasicMaterial({ color: 0x888888 }),
     windowOn: new THREE.MeshPhongMaterial({
         color: 0xffdd88, emissive: 0xffdd88, emissiveIntensity: 0.6,
         transparent: true, opacity: 0.8, side: THREE.DoubleSide
@@ -63,6 +60,10 @@ const Mats = {
         transparent: true, opacity: 0.8
     }),
     lighthouseDome: new THREE.MeshPhongMaterial({ color: 0x222222 }),
+    signPole: new THREE.MeshPhongMaterial({ color: 0x666666 }),
+    signGreen: new THREE.MeshPhongMaterial({ color: 0x228844, flatShading: true }),
+    signRed: new THREE.MeshPhongMaterial({ color: 0xcc2222, flatShading: true }),
+    signBlue: new THREE.MeshPhongMaterial({ color: 0x224488, flatShading: true }),
 };
 
 class CitySystem {
@@ -79,66 +80,53 @@ class CitySystem {
         this.geos = getSharedGeos();
     }
 
-    generate(terrain, seed) {
+    generate(terrain, seed, vehicleCount) {
         this.clear();
         this.noise = new SimplexNoise(seed);
         this.scene.add(this.group);
 
         const type = terrain.terrainType;
         if (type === 'islands') {
-            this.generateIslandCity(terrain);
+            this.generateIslandCity(terrain, vehicleCount);
         } else if (type === 'coastal') {
-            this.generateCoastalCity(terrain);
+            this.generateCoastalCity(terrain, vehicleCount);
         } else {
-            this.generateGridCity(terrain);
+            this.generateGridCity(terrain, vehicleCount);
         }
     }
 
     // ==========================================
-    // GRID CITY - minimal roads + buildings
+    // GRID CITY
     // ==========================================
-    generateGridCity(terrain) {
+    generateGridCity(terrain, vehicleCount) {
         const halfSize = terrain.size * 0.3;
-        const blockSize = 14; // Larger blocks = fewer buildings
-        const roadWidth = 2.0;
+        const blockSize = 14;
+        const roadWidth = 2.5;
 
         const roadPositions = [];
         for (let pos = -halfSize; pos <= halfSize; pos += blockSize) {
             roadPositions.push(pos);
         }
 
-        // Roads
+        // Roads with center line markings
         for (const pos of roadPositions) {
-            const roadLen = halfSize * 2 + blockSize;
-            const hRoad = new THREE.Mesh(
-                new THREE.PlaneGeometry(roadLen, roadWidth),
-                Mats.road
-            );
-            hRoad.rotation.x = -Math.PI / 2;
-            hRoad.position.set(0, 0.02, pos);
-            hRoad.receiveShadow = true;
-            this.group.add(hRoad);
-
-            const vRoad = new THREE.Mesh(
-                new THREE.PlaneGeometry(roadLen, roadWidth),
-                Mats.road
-            );
-            vRoad.rotation.x = -Math.PI / 2;
-            vRoad.rotation.y = Math.PI / 2;
-            vRoad.position.set(pos, 0.02, 0);
-            vRoad.receiveShadow = true;
-            this.group.add(vRoad);
+            this.createRoadSegment(0, pos, halfSize * 2 + blockSize, roadWidth, true, terrain);
+            this.createRoadSegment(pos, 0, halfSize * 2 + blockSize, roadWidth, false, terrain);
         }
 
-        // Intersections + traffic lights (sparse)
+        // Intersections + traffic lights
         for (let i = 0; i < roadPositions.length; i++) {
             for (let j = 0; j < roadPositions.length; j++) {
                 const x = roadPositions[i], z = roadPositions[j];
                 const h = terrain.getHeight(x, z);
                 if (h < terrain.waterLevel + 0.3) continue;
-                this.intersections.push({ x, z });
+                this.intersections.push({ x, z, roadIndexH: j, roadIndexV: i });
                 if ((i + j) % 3 === 0) {
                     this.createTrafficLight(x, z, h, roadWidth);
+                }
+                // Road signs at every 2nd intersection
+                if ((i + j) % 2 === 0) {
+                    this.createRoadSign(x, z, h, roadWidth);
                 }
             }
         }
@@ -150,14 +138,13 @@ class CitySystem {
                 const cz = (roadPositions[j] + roadPositions[j + 1]) / 2;
                 const h = terrain.getHeight(cx, cz);
                 if (h < terrain.waterLevel + 0.3) continue;
-
                 const distFromCenter = Math.sqrt(cx * cx + cz * cz);
                 const heightFactor = Math.max(0.3, 1.0 - distFromCenter / (terrain.size * 0.4));
                 this.createBuilding(cx, h, cz, heightFactor);
             }
         }
 
-        // Street lights (sparse, every 12 units)
+        // Street lights
         for (const pos of roadPositions) {
             for (let t = -halfSize; t <= halfSize; t += 12) {
                 const hH = terrain.getHeight(t, pos);
@@ -171,102 +158,189 @@ class CitySystem {
             }
         }
 
-        // Vehicles (max 6)
-        this.generateVehicles(terrain, roadPositions, halfSize, 4);
+        this.generateVehicles(terrain, roadPositions, halfSize, vehicleCount, false);
     }
 
     // ==========================================
-    // BUILDING - single mesh + 2 window strips
+    // ROAD SEGMENT with center line + edge lines
+    // ==========================================
+    createRoadSegment(x, z, length, width, isHorizontal, terrain) {
+        // Check if road is on land
+        const wl = terrain.waterLevel;
+        const halfLen = length / 2;
+
+        // For horizontal roads, check terrain along z=pos
+        // For vertical roads, check terrain along x=pos
+        // Only place road segments on land
+        if (isHorizontal) {
+            // Check a few points along the road
+            let onLand = false;
+            for (let t = -halfLen; t <= halfLen; t += 5) {
+                if (terrain.getHeight(t, z) > wl + 0.2) onLand = true;
+            }
+            if (!onLand) return;
+
+            // Road surface
+            const road = new THREE.Mesh(
+                new THREE.PlaneGeometry(length, width),
+                Mats.road
+            );
+            road.rotation.x = -Math.PI / 2;
+            road.position.set(x, 0.02, z);
+            road.receiveShadow = true;
+            this.group.add(road);
+
+            // Center dashed line (yellow)
+            const dashLen = 1.5, gapLen = 1.0, totalLen = dashLen + gapLen;
+            for (let t = -halfLen; t <= halfLen; t += totalLen) {
+                if (terrain.getHeight(t, z) < wl + 0.2) continue;
+                const dash = new THREE.Mesh(
+                    new THREE.PlaneGeometry(dashLen, 0.08),
+                    Mats.roadLine
+                );
+                dash.rotation.x = -Math.PI / 2;
+                dash.position.set(t, 0.04, z);
+                this.group.add(dash);
+            }
+
+            // Edge lines (white/gray)
+            for (const side of [-width / 2 + 0.1, width / 2 - 0.1]) {
+                const edge = new THREE.Mesh(
+                    new THREE.PlaneGeometry(length, 0.06),
+                    Mats.roadEdge
+                );
+                edge.rotation.x = -Math.PI / 2;
+                edge.position.set(x, 0.04, z + side);
+                this.group.add(edge);
+            }
+        } else {
+            let onLand = false;
+            for (let t = -halfLen; t <= halfLen; t += 5) {
+                if (terrain.getHeight(x, t) > wl + 0.2) onLand = true;
+            }
+            if (!onLand) return;
+
+            const road = new THREE.Mesh(
+                new THREE.PlaneGeometry(length, width),
+                Mats.road
+            );
+            road.rotation.x = -Math.PI / 2;
+            road.rotation.y = Math.PI / 2;
+            road.position.set(x, 0.02, z);
+            road.receiveShadow = true;
+            this.group.add(road);
+
+            // Center dashed line
+            const dashLen = 1.5, gapLen = 1.0, totalLen = dashLen + gapLen;
+            for (let t = -halfLen; t <= halfLen; t += totalLen) {
+                if (terrain.getHeight(x, t) < wl + 0.2) continue;
+                const dash = new THREE.Mesh(
+                    new THREE.PlaneGeometry(dashLen, 0.08),
+                    Mats.roadLine
+                );
+                dash.rotation.x = -Math.PI / 2;
+                dash.rotation.y = Math.PI / 2;
+                dash.position.set(x, 0.04, t);
+                this.group.add(dash);
+            }
+
+            // Edge lines
+            for (const side of [-width / 2 + 0.1, width / 2 - 0.1]) {
+                const edge = new THREE.Mesh(
+                    new THREE.PlaneGeometry(length, 0.06),
+                    Mats.roadEdge
+                );
+                edge.rotation.x = -Math.PI / 2;
+                edge.rotation.y = Math.PI / 2;
+                edge.position.set(x + side, 0.04, z);
+                this.group.add(edge);
+            }
+        }
+    }
+
+    // ==========================================
+    // ROAD SIGN
+    // ==========================================
+    createRoadSign(x, z, h, roadWidth) {
+        const group = new THREE.Group();
+        const pole = new THREE.Mesh(this.geos.signPole, Mats.signPole);
+        pole.position.y = 1.25;
+        group.add(pole);
+
+        const signTypes = [Mats.signGreen, Mats.signRed, Mats.signBlue];
+        const signMat = signTypes[Math.floor(Math.random() * signTypes.length)];
+        const sign = new THREE.Mesh(this.geos.signPlate, signMat);
+        sign.position.y = 2.3;
+        group.add(sign);
+
+        group.position.set(x + roadWidth / 2 + 1.2, Math.max(h * 0.15, 0), z + roadWidth / 2 + 1.2);
+        this.group.add(group);
+    }
+
+    // ==========================================
+    // BUILDING
     // ==========================================
     createBuilding(x, baseH, z, heightFactor) {
         const group = new THREE.Group();
-
-        // Size based on distance from center
         const nVal = this.noise.noise2D(x * 0.15, z * 0.15);
         const isTall = heightFactor > 0.6;
         const width = isTall ? 3 + Math.random() * 2 : 2 + Math.random() * 1.5;
         const depth = isTall ? 3 + Math.random() * 2 : 2 + Math.random() * 1.5;
         const height = Math.max(3, (isTall ? 6 + heightFactor * 14 + nVal * 4 : 3 + Math.random() * 4));
 
-        // Wall color - use a few preset colors instead of random
         const wallColors = isTall
             ? [0x667788, 0x808078, 0x596468]
-            : height > 6
-                ? [0xb0a8a0, 0x989890]
-                : [0xa39888];
+            : height > 6 ? [0xb0a8a0, 0x989890] : [0xa39888];
         const wallColor = wallColors[Math.floor(Math.abs(nVal * 10)) % wallColors.length];
 
-        // Body - single mesh
-        const bodyGeo = new THREE.BoxGeometry(width, height, depth);
-        const bodyMat = new THREE.MeshPhongMaterial({
-            color: wallColor,
-            flatShading: !isTall,
-            shininess: isTall ? 60 : 10
-        });
-        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        const body = new THREE.Mesh(
+            new THREE.BoxGeometry(width, height, depth),
+            new THREE.MeshPhongMaterial({ color: wallColor, flatShading: !isTall, shininess: isTall ? 60 : 10 })
+        );
         body.position.y = height / 2;
         body.castShadow = true;
         body.receiveShadow = true;
         group.add(body);
 
-        // Window strips - 2 strips per face instead of individual windows
-        // Front window strip
+        // Window strips (4 faces, shared material)
         const stripH = Math.min(height * 0.6, 5);
         const stripW = width * 0.7;
-        const frontStrip = new THREE.Mesh(
-            new THREE.PlaneGeometry(stripW, stripH),
-            Mats.windowOff
-        );
+        const sideStripW = depth * 0.7;
+
+        const frontStrip = new THREE.Mesh(new THREE.PlaneGeometry(stripW, stripH), Mats.windowOff);
         frontStrip.position.set(0, height * 0.45, depth / 2 + 0.01);
         group.add(frontStrip);
 
-        // Back window strip
-        const backStrip = new THREE.Mesh(
-            new THREE.PlaneGeometry(stripW, stripH),
-            Mats.windowOff
-        );
+        const backStrip = new THREE.Mesh(new THREE.PlaneGeometry(stripW, stripH), Mats.windowOff);
         backStrip.position.set(0, height * 0.45, -depth / 2 - 0.01);
         backStrip.rotation.y = Math.PI;
         group.add(backStrip);
 
-        // Side window strips
-        const sideStripW = depth * 0.7;
-        const sideStrip1 = new THREE.Mesh(
-            new THREE.PlaneGeometry(sideStripW, stripH),
-            Mats.windowOff
-        );
+        const sideStrip1 = new THREE.Mesh(new THREE.PlaneGeometry(sideStripW, stripH), Mats.windowOff);
         sideStrip1.rotation.y = Math.PI / 2;
         sideStrip1.position.set(width / 2 + 0.01, height * 0.45, 0);
         group.add(sideStrip1);
 
-        const sideStrip2 = new THREE.Mesh(
-            new THREE.PlaneGeometry(sideStripW, stripH),
-            Mats.windowOff
-        );
+        const sideStrip2 = new THREE.Mesh(new THREE.PlaneGeometry(sideStripW, stripH), Mats.windowOff);
         sideStrip2.rotation.y = -Math.PI / 2;
         sideStrip2.position.set(-width / 2 - 0.01, height * 0.45, 0);
         group.add(sideStrip2);
 
         group.userData.windowMeshes = [frontStrip, backStrip, sideStrip1, sideStrip2];
 
-        // Roof
         if (isTall) {
             const antenna = new THREE.Mesh(this.geos.antenna, Mats.antenna);
             antenna.position.y = height + 1;
             group.add(antenna);
-            // Red blink - share one light for all tall buildings (handled in update)
             group.userData.hasTopLight = true;
         } else {
             const roofEdge = new THREE.Mesh(
                 new THREE.BoxGeometry(width + 0.1, 0.15, depth + 0.1),
-                new THREE.MeshPhongMaterial({ color: wallColor * 0.8 & 0xffffff })
+                new THREE.MeshPhongMaterial({ color: wallColor & 0xcccccc })
             );
             roofEdge.position.y = height + 0.075;
             group.add(roofEdge);
         }
-
-        // No per-building PointLight! (saves dozens of lights)
-        // Night glow is handled by window material emissive change
 
         group.position.set(x, Math.max(baseH * 0.15, 0), z);
         this.group.add(group);
@@ -274,33 +348,26 @@ class CitySystem {
     }
 
     // ==========================================
-    // ISLAND CITY - small harbor town
+    // ISLAND CITY
     // ==========================================
-    generateIslandCity(terrain) {
+    generateIslandCity(terrain, vehicleCount) {
         const halfSize = terrain.size * 0.25;
-
-        // Cross roads
         const angles = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
         for (const angle of angles) {
             const endR = halfSize * 0.5;
             const road = new THREE.Mesh(
-                new THREE.PlaneGeometry(endR, 2.0),
+                new THREE.PlaneGeometry(endR, 2.5),
                 Mats.road
             );
             road.rotation.x = -Math.PI / 2;
             road.rotation.y = angle;
-            road.position.set(
-                Math.cos(angle) * endR * 0.5,
-                0.02,
-                Math.sin(angle) * endR * 0.5
-            );
+            road.position.set(Math.cos(angle) * endR * 0.5, 0.02, Math.sin(angle) * endR * 0.5);
             this.group.add(road);
         }
 
         this.createHarbor(terrain);
         this.createLighthouse(terrain);
 
-        // 8 island buildings max
         let placed = 0;
         for (let i = 0; i < 20 && placed < 8; i++) {
             const angle = Math.random() * Math.PI * 2;
@@ -313,23 +380,27 @@ class CitySystem {
             placed++;
         }
 
-        this.createBoats(terrain, 3);
+        // Boats count based on vehicleCount
+        const boatCount = Math.max(1, Math.min(vehicleCount, 5));
+        this.createBoats(terrain, boatCount);
     }
 
     // ==========================================
-    // COASTAL CITY - seaside town
+    // COASTAL CITY - roads only on land
     // ==========================================
-    generateCoastalCity(terrain) {
-        const halfSize = terrain.size * 0.25;
-        const roadWidth = 2.0;
+    generateCoastalCity(terrain, vehicleCount) {
+        const sz = terrain.size;
         const wl = terrain.waterLevel;
+        const halfSize = sz * 0.25;
+        const roadWidth = 2.5;
+        const blockSize = 14;
 
-        // Find coastline (just a few scan points)
+        // Find coastline
         const coastPoints = [];
-        for (let x = -halfSize; x <= halfSize; x += 4) {
-            for (let z = -halfSize; z <= halfSize; z += 2) {
+        for (let x = -halfSize; x <= halfSize; x += 3) {
+            for (let z = -halfSize; z <= halfSize; z += 1) {
                 const h = terrain.getHeight(x, z);
-                const hNext = terrain.getHeight(x, z + 1);
+                const hNext = terrain.getHeight(x, z - 1);
                 if (h >= wl && h < wl + 1.5 && hNext < wl) {
                     coastPoints.push({ x, z, h });
                     break;
@@ -337,7 +408,7 @@ class CitySystem {
             }
         }
 
-        // Boardwalk (simple flat path along coast)
+        // Boardwalk along coast
         if (coastPoints.length > 1) {
             for (let i = 0; i < coastPoints.length - 1; i += 2) {
                 const p1 = coastPoints[i];
@@ -361,41 +432,44 @@ class CitySystem {
             }
         }
 
-        // Simple road grid (fewer roads)
+        // Roads - only on land (check each segment)
         const roadPositions = [];
-        for (let pos = -halfSize; pos <= halfSize; pos += 14) {
+        for (let pos = -halfSize; pos <= halfSize; pos += blockSize) {
             roadPositions.push(pos);
         }
-        for (const pos of roadPositions) {
-            const roadLen = halfSize * 2 + 14;
-            const hRoad = new THREE.Mesh(
-                new THREE.PlaneGeometry(roadLen, roadWidth),
-                Mats.road
-            );
-            hRoad.rotation.x = -Math.PI / 2;
-            hRoad.position.set(0, 0.02, pos);
-            this.group.add(hRoad);
 
-            const vRoad = new THREE.Mesh(
-                new THREE.PlaneGeometry(roadLen, roadWidth),
-                Mats.road
-            );
-            vRoad.rotation.x = -Math.PI / 2;
-            vRoad.rotation.y = Math.PI / 2;
-            vRoad.position.set(pos, 0.02, 0);
-            this.group.add(vRoad);
+        for (const pos of roadPositions) {
+            this.createRoadSegment(0, pos, halfSize * 2 + blockSize, roadWidth, true, terrain);
+            this.createRoadSegment(pos, 0, halfSize * 2 + blockSize, roadWidth, false, terrain);
         }
 
-        // Coastal buildings (max 12)
+        // Intersections on land only
+        for (let i = 0; i < roadPositions.length; i++) {
+            for (let j = 0; j < roadPositions.length; j++) {
+                const x = roadPositions[i], z = roadPositions[j];
+                const h = terrain.getHeight(x, z);
+                if (h < wl + 0.3) continue;
+                this.intersections.push({ x, z, roadIndexH: j, roadIndexV: i });
+                if ((i + j) % 3 === 0) {
+                    this.createTrafficLight(x, z, h, roadWidth);
+                }
+                if ((i + j) % 2 === 0) {
+                    this.createRoadSign(x, z, h, roadWidth);
+                }
+            }
+        }
+
+        // Buildings on land only
         let placed = 0;
-        for (let i = 0; i < 25 && placed < 12; i++) {
-            const angle = Math.random() * Math.PI * 2;
-            const dist = 3 + Math.random() * halfSize * 0.7;
-            const x = Math.cos(angle) * dist;
-            const z = Math.sin(angle) * dist;
+        for (let i = 0; i < 30 && placed < 12; i++) {
+            const x = -halfSize + Math.random() * halfSize * 2;
+            const z = coastPoints.length > 0
+                ? coastPoints[0].z + 2 + Math.random() * halfSize  // Inland from coast
+                : Math.random() * halfSize;
             const h = terrain.getHeight(x, z);
-            if (h < wl + 0.5 || h > 3.5) continue;
-            if (Math.abs(z - wl) < 3) {
+            if (h < wl + 0.5 || h > 4) continue;
+            const distFromCoast = h - wl;
+            if (distFromCoast < 2) {
                 this.createCoastalBuilding(x, h, z);
             } else {
                 this.createIslandBuilding(x, h, z);
@@ -404,30 +478,36 @@ class CitySystem {
         }
 
         this.createBeachFurniture(terrain);
-        this.createBoats(terrain, 3);
 
-        // Few street lights
+        // Boats + some cars
+        const boatCount = Math.max(1, Math.min(Math.floor(vehicleCount * 0.6), 6));
+        this.createBoats(terrain, boatCount);
+
+        // Street lights on land only
         for (const pos of roadPositions) {
             for (let t = -halfSize; t <= halfSize; t += 14) {
                 const hV = terrain.getHeight(pos, t);
-                if (hV > wl + 0.3 && hV < 4) {
+                if (hV > wl + 0.3 && hV < 5) {
                     this.createStreetLight(pos, hV, t);
                 }
             }
         }
 
-        this.generateVehicles(terrain, roadPositions, halfSize, 3);
+        // Some cars on land roads
+        const carCount = Math.max(0, vehicleCount - boatCount);
+        if (carCount > 0) {
+            this.generateVehicles(terrain, roadPositions, halfSize, carCount, true);
+        }
     }
 
     // ==========================================
-    // ISLAND BUILDING - small coastal house
+    // ISLAND BUILDING
     // ==========================================
     createIslandBuilding(x, h, z) {
         const group = new THREE.Group();
         const width = 1.5 + Math.random() * 2;
         const depth = 1.5 + Math.random() * 2;
         const height = 2 + Math.random() * 2.5;
-
         const colors = [0xf0d8c0, 0xc0d8e8, 0xd8d0b8, 0xb8ccb8, 0xe0c8b0];
         const wallColor = colors[Math.floor(Math.random() * colors.length)];
 
@@ -439,7 +519,6 @@ class CitySystem {
         body.castShadow = true;
         group.add(body);
 
-        // Roof
         const roofH = Math.max(width, depth) * 0.5;
         const roof = new THREE.Mesh(
             new THREE.ConeGeometry(Math.max(width, depth) * 0.72, roofH, 4),
@@ -450,12 +529,10 @@ class CitySystem {
         roof.castShadow = true;
         group.add(roof);
 
-        // 2 windows (front face only, shared material)
-        const wGeo = this.geos.windowPlane;
-        const w1 = new THREE.Mesh(wGeo, Mats.windowOff);
+        const w1 = new THREE.Mesh(this.geos.windowPlane, Mats.windowOff);
         w1.position.set(-width * 0.25, height * 0.4, depth / 2 + 0.01);
         group.add(w1);
-        const w2 = new THREE.Mesh(wGeo, Mats.windowOff);
+        const w2 = new THREE.Mesh(this.geos.windowPlane, Mats.windowOff);
         w2.position.set(width * 0.25, height * 0.4, depth / 2 + 0.01);
         group.add(w2);
         group.userData.windowMeshes = [w1, w2];
@@ -467,14 +544,13 @@ class CitySystem {
     }
 
     // ==========================================
-    // COASTAL BUILDING - seaside villa
+    // COASTAL BUILDING
     // ==========================================
     createCoastalBuilding(x, h, z) {
         const group = new THREE.Group();
         const width = 2 + Math.random() * 2;
         const depth = 2 + Math.random() * 1.5;
         const height = 2.5 + Math.random() * 2;
-
         const colors = [0xf0ece0, 0xb8dde8, 0xece0c8, 0xe0b8a0, 0xa0d8c8];
         const wallColor = colors[Math.floor(Math.random() * colors.length)];
 
@@ -486,7 +562,6 @@ class CitySystem {
         body.castShadow = true;
         group.add(body);
 
-        // Flat roof
         const roof = new THREE.Mesh(
             new THREE.BoxGeometry(width + 0.3, 0.15, depth + 0.3),
             new THREE.MeshPhongMaterial({ color: 0x5a4c40, flatShading: true })
@@ -494,18 +569,15 @@ class CitySystem {
         roof.position.y = height + 0.075;
         group.add(roof);
 
-        // Balcony rail
         const rail = new THREE.Mesh(this.geos.railBar, Mats.rail);
         rail.scale.x = width;
         rail.position.set(0, height * 0.45, depth / 2 + 0.3);
         group.add(rail);
 
-        // 2 front windows
-        const wGeo = this.geos.windowPlane;
-        const w1 = new THREE.Mesh(wGeo, Mats.windowOff);
+        const w1 = new THREE.Mesh(this.geos.windowPlane, Mats.windowOff);
         w1.position.set(-width * 0.3, height * 0.4, depth / 2 + 0.01);
         group.add(w1);
-        const w2 = new THREE.Mesh(wGeo, Mats.windowOff);
+        const w2 = new THREE.Mesh(this.geos.windowPlane, Mats.windowOff);
         w2.position.set(width * 0.3, height * 0.4, depth / 2 + 0.01);
         group.add(w2);
         group.userData.windowMeshes = [w1, w2];
@@ -517,7 +589,7 @@ class CitySystem {
     }
 
     // ==========================================
-    // BEACH FURNITURE - just a few umbrellas
+    // BEACH FURNITURE
     // ==========================================
     createBeachFurniture(terrain) {
         const wl = terrain.waterLevel;
@@ -541,10 +613,7 @@ class CitySystem {
 
             const umbrella = new THREE.Mesh(
                 new THREE.ConeGeometry(1.2, 0.4, 8),
-                new THREE.MeshPhongMaterial({
-                    color: umbrellaColors[i % umbrellaColors.length],
-                    flatShading: true
-                })
+                new THREE.MeshPhongMaterial({ color: umbrellaColors[i % umbrellaColors.length], flatShading: true })
             );
             umbrella.position.y = 2.0;
             group.add(umbrella);
@@ -559,7 +628,6 @@ class CitySystem {
     // ==========================================
     createTrafficLight(x, z, h, roadWidth) {
         const group = new THREE.Group();
-
         const pole = new THREE.Mesh(this.geos.poleMedium, Mats.trafficPole);
         pole.position.y = 1.5;
         group.add(pole);
@@ -583,21 +651,28 @@ class CitySystem {
 
         group.position.set(x + roadWidth / 2 + 0.6, Math.max(h * 0.15, 0), z + roadWidth / 2 + 0.6);
         this.group.add(group);
-        this.trafficLights.push({ group, bulbs, phase: Math.random() * 20, colors: bulbColors });
+        this.trafficLights.push({ group, bulbs, x, z, phase: Math.random() * 20, colors: bulbColors });
     }
 
     // ==========================================
-    // STREET LIGHT - no PointLight, just emissive
+    // STREET LIGHT
     // ==========================================
     createStreetLight(x, h, z) {
         const group = new THREE.Group();
-
         const pole = new THREE.Mesh(this.geos.poleThin, Mats.streetPole);
         pole.position.y = 1.75;
         group.add(pole);
 
+        // Lamp arm (bent toward road)
+        const arm = new THREE.Mesh(
+            new THREE.BoxGeometry(0.8, 0.04, 0.04),
+            Mats.streetPole
+        );
+        arm.position.set(0.4, 3.4, 0);
+        group.add(arm);
+
         const lamp = new THREE.Mesh(this.geos.lampSphere, Mats.lampOff);
-        lamp.position.y = 3.5;
+        lamp.position.set(0.8, 3.3, 0);
         group.add(lamp);
 
         group.position.set(x, Math.max(h * 0.15, 0), z);
@@ -606,7 +681,7 @@ class CitySystem {
     }
 
     // ==========================================
-    // HARBOR - simple dock
+    // HARBOR
     // ==========================================
     createHarbor(terrain) {
         let bestAngle = 0, bestH = -Infinity;
@@ -626,11 +701,7 @@ class CitySystem {
 
         for (let i = 0; i < 4; i++) {
             const plank = new THREE.Mesh(this.geos.dockPlank, Mats.wood);
-            plank.position.set(
-                hx + dockDir.x * i,
-                terrain.waterLevel + 0.15,
-                hz + dockDir.z * i
-            );
+            plank.position.set(hx + dockDir.x * i, terrain.waterLevel + 0.15, hz + dockDir.z * i);
             plank.rotation.y = bestAngle;
             this.group.add(plank);
         }
@@ -668,7 +739,6 @@ class CitySystem {
         const lh = terrain.getHeight(lx, lz);
 
         const group = new THREE.Group();
-
         const tower = new THREE.Mesh(
             new THREE.CylinderGeometry(0.4, 0.7, 5, 8),
             Mats.lighthouseWhite
@@ -698,7 +768,6 @@ class CitySystem {
         dome.position.y = 5.9;
         group.add(dome);
 
-        // SpotLight for beam (just 1 for lighthouse)
         const beam = new THREE.SpotLight(0xffffcc, 1.5, 40, Math.PI / 6, 0.5, 1);
         beam.position.y = 5.5;
         beam.target.position.set(lx + 20, lh * 0.15 + 3, lz);
@@ -743,9 +812,9 @@ class CitySystem {
     }
 
     // ==========================================
-    // VEHICLES - minimal
+    // VEHICLES - follow traffic rules
     // ==========================================
-    generateVehicles(terrain, roadPositions, halfSize, count) {
+    generateVehicles(terrain, roadPositions, halfSize, count, isCoastal) {
         for (let i = 0; i < count; i++) {
             const isHorizontal = Math.random() < 0.5;
             const roadIndex = Math.floor(Math.random() * roadPositions.length);
@@ -768,6 +837,9 @@ class CitySystem {
                 isHorizontal ? roadPos + lane : t
             );
 
+            // Only place on land
+            if (h < terrain.waterLevel + 0.3) continue;
+
             let xPos, zPos;
             if (isHorizontal) {
                 xPos = t; zPos = roadPos + lane;
@@ -778,7 +850,18 @@ class CitySystem {
             }
 
             group.position.set(xPos, Math.max(h * 0.15 + 0.02, 0.02), zPos);
-            group.userData = { isHorizontal, speed: 1.5 + Math.random() * 2, direction: lane > 0 ? 1 : -1, roadPos, lane, halfSize };
+            group.userData = {
+                isHorizontal,
+                speed: 1.5 + Math.random() * 2,
+                baseSpeed: 1.5 + Math.random() * 2,
+                direction: lane > 0 ? 1 : -1,
+                roadPos,
+                lane,
+                halfSize,
+                // Traffic: will slow down near red-light intersections
+                stopped: false,
+                stopTimer: 0,
+            };
 
             this.group.add(group);
             this.vehicles.push(group);
@@ -790,26 +873,38 @@ class CitySystem {
     // ==========================================
     setLights(on) {
         this.lightsOn = on;
-
         for (const sl of this.streetLightGroups) {
             sl.lamp.material = on ? Mats.lampOn : Mats.lampOff;
         }
-
         for (const bld of this.cityBuildings) {
             if (bld.userData.windowMeshes) {
                 const mat = on ? Mats.windowOn : Mats.windowOff;
                 for (const w of bld.userData.windowMeshes) {
-                    w.material = mat; // No cloning, just swap shared material
+                    w.material = mat;
                 }
             }
         }
     }
 
     // ==========================================
-    // UPDATE
+    // UPDATE - vehicles follow traffic lights
     // ==========================================
     update(time) {
-        // Vehicles
+        // Determine which traffic lights are red (for H vs V roads)
+        const redForHorizontal = [];
+        const redForVertical = [];
+        for (const tl of this.trafficLights) {
+            const cycleTime = 8;
+            const phase = (time + tl.phase) % cycleTime;
+            // Green=2(index), Yellow=1, Red=0
+            // When index 0 (red) is active: depends on which direction
+            // Simplified: alternate green for H and V roads
+            const isGreenForH = phase < cycleTime * 0.45;
+            redForHorizontal.push({ x: tl.x, z: tl.z, isRed: !isGreenForH });
+            redForVertical.push({ x: tl.x, z: tl.z, isRed: isGreenForH });
+        }
+
+        // Vehicles - slow down at red lights
         for (const v of this.vehicles) {
             const ud = v.userData;
             if (ud.isBoat) {
@@ -818,6 +913,32 @@ class CitySystem {
                 continue;
             }
             if (ud.isHorizontal === undefined) continue;
+
+            // Check if near a red-light intersection
+            let shouldStop = false;
+            const redLights = ud.isHorizontal ? redForHorizontal : redForVertical;
+            for (const rl of redLights) {
+                if (!rl.isRed) continue;
+                const dist = ud.isHorizontal
+                    ? Math.abs(v.position.z - rl.z) + Math.abs(v.position.x - rl.x)
+                    : Math.abs(v.position.x - rl.x) + Math.abs(v.position.z - rl.z);
+                // Slow down within 3 units, stop within 1.5 units
+                if (dist < 3) {
+                    if (dist < 1.5) {
+                        shouldStop = true;
+                    } else {
+                        ud.speed = ud.baseSpeed * 0.3;
+                    }
+                    break;
+                }
+            }
+
+            if (shouldStop) {
+                ud.speed = 0;
+            } else if (ud.speed < ud.baseSpeed) {
+                // Gradually resume speed
+                ud.speed = Math.min(ud.speed + 0.05, ud.baseSpeed);
+            }
 
             const move = ud.speed * ud.direction * 0.016;
             if (ud.isHorizontal) {
@@ -831,7 +952,7 @@ class CitySystem {
             }
         }
 
-        // Traffic lights (cycle through colors)
+        // Traffic light cycling
         for (const tl of this.trafficLights) {
             const cycleTime = 8;
             const phase = (time + tl.phase) % cycleTime;
@@ -843,7 +964,7 @@ class CitySystem {
             }
         }
 
-        // Lighthouse beam rotation
+        // Lighthouse beam
         for (const bld of this.cityBuildings) {
             if (bld.userData.beamLight) {
                 bld.userData.beamLight.target.position.x = Math.cos(time * 0.5) * 30;
@@ -857,20 +978,14 @@ class CitySystem {
     // ==========================================
     clear() {
         this.group.traverse((child) => {
-            if (child.geometry) {
-                // Don't dispose shared geometries
-                if (!Object.values(this.geos).includes(child.geometry)) {
-                    child.geometry.dispose();
-                }
+            if (child.geometry && !Object.values(this.geos).includes(child.geometry)) {
+                child.geometry.dispose();
             }
             if (child.material) {
-                // Don't dispose shared materials
                 const isShared = Object.values(Mats).includes(child.material);
                 if (!isShared) {
                     if (Array.isArray(child.material)) {
-                        child.material.forEach(m => {
-                            if (!Object.values(Mats).includes(m)) m.dispose();
-                        });
+                        child.material.forEach(m => { if (!Object.values(Mats).includes(m)) m.dispose(); });
                     } else {
                         child.material.dispose();
                     }
