@@ -403,15 +403,25 @@ class PCGWorld {
     }
 
     generateWorld() {
-        // Full regeneration - terrain + everything
+        // Full regeneration — dispose EVERYTHING before rebuild
         if (this.terrain) {
-            if (this.terrain.mesh) this.scene.remove(this.terrain.mesh);
-            if (this.terrain.waterMesh) this.scene.remove(this.terrain.waterMesh);
+            if (this.terrain.mesh) {
+                this.scene.remove(this.terrain.mesh);
+                this.terrain.mesh.geometry.dispose();
+                this.terrain.mesh.material.dispose();
+            }
+            if (this.terrain.waterMesh) {
+                this.scene.remove(this.terrain.waterMesh);
+                this.terrain.waterMesh.geometry.dispose();
+                this.terrain.waterMesh.material.dispose();
+            }
+            this.terrain.mesh = null;
+            this.terrain.waterMesh = null;
         }
-        if (this.fire) this.fire.clear();
-        if (this.city) this.city.clear();
-        if (this.vegetation) this.vegetation.clear();
-        if (this.houses) this.houses.clear();
+        if (this.fire)     { this.fire.clear();     this.fire = null; }
+        if (this.city)     { this.city.clear();      this.city = null; }
+        if (this.vegetation) { this.vegetation.clear(); this.vegetation = null; }
+        if (this.houses)   { this.houses.clear();    this.houses = null; }
 
         this.terrain = new ProceduralTerrain(this.scene, {
             size: 30,
@@ -628,18 +638,13 @@ class PCGWorld {
     scheduleRegen() {
         if (this._regenScheduled) return;
         this._regenScheduled = true;
-        requestAnimationFrame(() => {
+        // Force a render flush first so GPU releases old objects
+        this.renderer.render(this.scene, this.camera);
+        // Then rebuild on next microtask
+        setTimeout(() => {
             this._regenScheduled = false;
-            try {
-                if (this.city) { this.city.clear(); this.city = null; }
-                if (this.houses) { this.houses.clear(); this.houses = null; }
-                this.generateWorld();
-            } catch (e) {
-                console.error('Regen failed:', e);
-                const loading = document.getElementById('loading');
-                if (loading) { loading.innerHTML = '<div style=\"color:#f44\">Regen error: ' + e.message + '</div>'; loading.style.opacity = '1'; loading.style.display = 'flex'; }
-            }
-        });
+            this.generateWorld();
+        }, 0);
     }
 
     setupUI() {
