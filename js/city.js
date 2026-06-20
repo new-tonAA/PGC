@@ -210,29 +210,38 @@ class CitySystem {
             }
         }
 
-        const maxBuildings = this.buildingCount > 0 ? this.buildingCount : 999;
-        let buildingPlaced = 0;
+        const totalBuildings = this.buildingCount > 0 ? this.buildingCount : 60;
+        let buildingsPlaced = 0;
 
+        // Collect all valid blocks first (for even distribution)
+        const blocks = [];
         for (let i = 0; i < roadPositionsX.length - 1; i++) {
             for (let j = 0; j < roadPositionsZ.length - 1; j++) {
-                if (buildingPlaced >= maxBuildings) break;
                 const x1 = roadPositionsX[i] + roadWidth / 2 + 0.8;
                 const z1 = roadPositionsZ[j] + roadWidth / 2 + 0.8;
                 const x2 = roadPositionsX[i + 1] - roadWidth / 2 - 0.8;
                 const z2 = roadPositionsZ[j + 1] - roadWidth / 2 - 0.8;
-
                 if (x2 - x1 < 2 || z2 - z1 < 2) continue;
-
-                const centerX = (x1 + x2) / 2;
-                const centerZ = (z1 + z2) / 2;
-                const h = terrain.getHeight(centerX, centerZ);
+                const cx = (x1 + x2) / 2, cz = (z1 + z2) / 2;
+                const h = terrain.getHeight(cx, cz);
                 if (h < terrain.waterLevel + 0.3) continue;
-                const distFromCenter = Math.sqrt(centerX * centerX + centerZ * centerZ);
-                const heightFactor = Math.max(0.25, 1.0 - distFromCenter / (terrain.size * 0.45));
-                this.generateBlock(x1, z1, x2, z2, h, heightFactor, terrain);
-                buildingPlaced++;
+                const dist = Math.sqrt(cx * cx + cz * cz);
+                const heightFactor = Math.max(0.25, 1.0 - dist / (terrain.size * 0.45));
+                blocks.push({ x1, z1, x2, z2, h, heightFactor, cx, cz });
             }
-            if (buildingPlaced >= maxBuildings) break;
+        }
+
+        if (blocks.length === 0) return;
+
+        // Distribute buildings across blocks proportionally (max 4 per block)
+        const perBlock = Math.max(1, Math.ceil(totalBuildings / blocks.length));
+        const maxPerBlock = Math.min(4, perBlock);
+
+        for (const b of blocks) {
+            if (buildingsPlaced >= totalBuildings) break;
+            const toPlace = Math.min(maxPerBlock, totalBuildings - buildingsPlaced);
+            const placed = this.generateBlockN(b.x1, b.z1, b.x2, b.z2, b.h, b.heightFactor, terrain, toPlace);
+            buildingsPlaced += placed;
         }
 
         if (this.intersections.length > 0) {
@@ -872,33 +881,39 @@ class CitySystem {
     }
 
     generateBlock(x1, z1, x2, z2, baseH, heightFactor, terrain) {
-        const blockW = x2 - x1;
-        const blockD = z2 - z1;
-        const cx = (x1 + x2) / 2;
-        const cz = (z1 + z2) / 2;
-
-        const noiseVal = this.noise.noise2D(cx * 0.1, cz * 0.1);
+        const blockW = x2 - x1, blockD = z2 - z1;
+        const noiseVal = this.noise.noise2D((x1+x2)/2*0.1, (z1+z2)/2*0.1);
         const numBuildings = 1 + Math.floor(Math.abs(noiseVal) * 3);
-
         for (let i = 0; i < numBuildings; i++) {
-            const bw = 2 + Math.random() * Math.min(blockW * 0.4, 4);
-            const bd = 2 + Math.random() * Math.min(blockD * 0.4, 4);
-
-            const bx = x1 + 0.5 + Math.random() * (blockW - bw - 1);
-            const bz = z1 + 0.5 + Math.random() * (blockD - bd - 1);
-
-            if (this.checkPenetration(bx, bz, bw, bd)) continue;
-
-            const bh = terrain.getHeight(bx, bz);
-            if (bh < terrain.waterLevel + 0.3) continue;
-
-            const hNoise = this.noise.noise2D(bx * 0.15, bz * 0.15);
-            const maxH = 4 + heightFactor * 18 + hNoise * 6;
-            const height = Math.max(4, 3 + Math.random() * maxH);
-
-            this.createSkyscraper(bx, bh, bz, bw, height, bd);
-            this.placedBuildings.push({ x: bx, z: bz, w: bw, d: bd });
+            this.placeBuildingInBlock(x1, z1, x2, z2, blockW, blockD, baseH, heightFactor, terrain);
         }
+    }
+
+    // Place exactly num buildings in this block (or less if penetration fails)
+    generateBlockN(x1, z1, x2, z2, baseH, heightFactor, terrain, num) {
+        const blockW = x2 - x1, blockD = z2 - z1;
+        let placed = 0;
+        for (let i = 0; i < num * 2 && placed < num; i++) {
+            if (this.placeBuildingInBlock(x1, z1, x2, z2, blockW, blockD, baseH, heightFactor, terrain))
+                placed++;
+        }
+        return placed;
+    }
+
+    placeBuildingInBlock(x1, z1, x2, z2, blockW, blockD, baseH, heightFactor, terrain) {
+        const bw = 2 + Math.random() * Math.min(blockW * 0.4, 5);
+        const bd = 2 + Math.random() * Math.min(blockD * 0.4, 5);
+        const bx = x1 + 0.5 + Math.random() * (blockW - bw - 0.5);
+        const bz = z1 + 0.5 + Math.random() * (blockD - bd - 0.5);
+        if (this.checkPenetration(bx, bz, bw, bd)) return false;
+        const bh = terrain.getHeight(bx, bz);
+        if (bh < terrain.waterLevel + 0.3) return false;
+        const hNoise = this.noise.noise2D(bx * 0.15, bz * 0.15);
+        const maxH = 4 + heightFactor * 20 + hNoise * 6;
+        const height = Math.max(3, 3 + Math.random() * maxH);
+        this.createSkyscraper(bx, bh, bz, bw, height, bd);
+        this.placedBuildings.push({ x: bx, z: bz, w: bw, d: bd });
+        return true;
     }
 
     createSkyscraper(x, baseH, z, width, height, depth) {
@@ -2079,10 +2094,10 @@ class CitySystem {
                         ud.turnTimer = 0;
                         ud.stuckTimer = 0;
                     } else {
-                        // 真正死路：重置到路段起点
-                        ud.progress  = 0.02;
-                        ud.reverse   = false;
-                        ud.lane      = 0.5;
+                        // No outgoing road: flip direction on same road (stay in place)
+                        ud.reverse = !ud.reverse;
+                        ud.lane = ud.reverse ? -0.5 : 0.5;
+                        ud.progress = ud.reverse ? 0.98 : 0.02;
                         ud.stuckTimer = 0;
                     }
                 }

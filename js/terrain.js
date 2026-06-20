@@ -289,7 +289,7 @@ class ProceduralTerrain {
 
     createOcean() {
         const isIsland = this.terrainType === 'islands';
-        const waterSize = isIsland ? this.size * 1.5 : this.size * 1.15;
+        const waterSize = isIsland ? this.size * 1.5 : this.size;
 
         const waterGeo = new THREE.PlaneGeometry(waterSize, waterSize);
 
