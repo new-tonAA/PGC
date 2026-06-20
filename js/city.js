@@ -376,135 +376,139 @@ class CitySystem {
         const group = new THREE.Group();
         const nVal = this.noise.noise2D(x * 0.15, z * 0.15);
         const absN = Math.abs(nVal);
+        const roll = Math.random();
 
-        let width, depth, height, wallColor, shininess, flatShade;
+        let width, depth, height, wallColor;
+        let buildingStyle = '';
 
         if (zone === 'downtown') {
             width = 2.5 + absN * 2.5;
             depth = 2.5 + Math.random() * 2;
-            const heightBase = 8 + (1 - distFromCenter / 12) * 18;
-            height = Math.max(6, heightBase + nVal * 4);
-            const colors = [0x556677, 0x667788, 0x445566, 0x8090a0, 0x708898];
-            wallColor = colors[Math.floor(absN * 10) % colors.length];
-            shininess = 80;
-            flatShade = false;
+            const hb = 10 + (1 - distFromCenter / 14) * 22;
+            height = Math.max(6, hb + nVal * 4);
+            const isT = height > 10;
+            if (isT) {
+                if      (roll < 0.2) { wallColor = new THREE.Color(0.4, 0.55, 0.65); buildingStyle = 'glass_blue'; }
+                else if (roll < 0.35){ wallColor = new THREE.Color(0.5, 0.5, 0.48); buildingStyle = 'glass_silver'; }
+                else if (roll < 0.5) { wallColor = new THREE.Color(0.35, 0.4, 0.45); buildingStyle = 'glass_dark'; }
+                else if (roll < 0.62){ wallColor = new THREE.Color(0.45, 0.5, 0.55); buildingStyle = 'twin_tower'; }
+                else if (roll < 0.74){ wallColor = new THREE.Color(0.55, 0.5, 0.48); buildingStyle = 'setback'; }
+                else if (roll < 0.86){ wallColor = new THREE.Color(0.42, 0.52, 0.58); buildingStyle = 'crown'; }
+                else                 { wallColor = new THREE.Color(0.65, 0.6, 0.55); buildingStyle = 'dome_top'; }
+            } else {
+                const cs = [0x556677, 0x667788, 0x445566, 0x8090a0, 0x708898];
+                wallColor = new THREE.Color(cs[Math.floor(absN*10)%cs.length]);
+                buildingStyle = 'simple_tall';
+            }
         } else if (zone === 'commercial') {
             width = 3 + Math.random() * 2;
             depth = 2.5 + Math.random() * 1.5;
             height = 4 + Math.random() * 6 + absN * 2;
-            const colors = [0xb0a8a0, 0xa0a098, 0xc0b8a0, 0x909088, 0xb8b0a0];
-            wallColor = colors[Math.floor(absN * 10) % colors.length];
-            shininess = 30;
-            flatShade = false;
+            if      (roll < 0.25) { wallColor = new THREE.Color(0.7, 0.68, 0.65); buildingStyle = 'concrete'; }
+            else if (roll < 0.5)  { wallColor = new THREE.Color(0.6, 0.58, 0.55); buildingStyle = 'dark_mid'; }
+            else if (roll < 0.7)  { wallColor = new THREE.Color(0.75, 0.65, 0.55); buildingStyle = 'brick'; }
+            else if (roll < 0.85) { wallColor = new THREE.Color(0.55, 0.6, 0.65); buildingStyle = 'modern_mid'; }
+            else                  { wallColor = new THREE.Color(0.85, 0.82, 0.75); buildingStyle = 'cream_mid'; }
         } else {
-            // Residential
             width = 2 + Math.random() * 1.5;
             depth = 2 + Math.random() * 1;
             height = 2 + Math.random() * 3;
-            const colors = [0xd8c8b0, 0xc0d0c0, 0xb8a898, 0xa0b8a0, 0xd0c0b0];
-            wallColor = colors[Math.floor(absN * 10) % colors.length];
-            shininess = 10;
-            flatShade = true;
+            if      (roll < 0.2) { wallColor = new THREE.Color(0.7, 0.5, 0.4); buildingStyle = 'brick_low'; }
+            else if (roll < 0.4) { wallColor = new THREE.Color(0.9, 0.85, 0.7); buildingStyle = 'cream_low'; }
+            else if (roll < 0.6) { wallColor = new THREE.Color(0.6, 0.65, 0.6); buildingStyle = 'cottage'; }
+            else                 { wallColor = new THREE.Color(0.78, 0.72, 0.65); buildingStyle = 'plain_low'; }
         }
 
+        // === Main body ===
         const body = new THREE.Mesh(
             new THREE.BoxGeometry(width, height, depth),
-            new THREE.MeshPhongMaterial({ color: wallColor, flatShading: flatShade, shininess })
+            new THREE.MeshPhongMaterial({ color: wallColor, shininess: zone === 'downtown' ? 80 : 20 })
         );
         body.position.y = height / 2;
-        body.castShadow = true;
-        body.receiveShadow = true;
+        body.castShadow = true; body.receiveShadow = true;
         group.add(body);
 
-        // Window strips (all 4 faces)
+        // === Windows (grid pattern, all 4 faces) ===
         const windowMeshes = [];
-        if (height > 3) {
-            const stripH = Math.min(height * 0.55, 6);
-            const stripW = width * 0.75;
-            const sideW = depth * 0.75;
-
-            const front = new THREE.Mesh(new THREE.PlaneGeometry(stripW, stripH), Mats.windowOff);
-            front.position.set(0, height * 0.4, depth / 2 + 0.01);
-            group.add(front);
-            windowMeshes.push(front);
-
-            const back = new THREE.Mesh(new THREE.PlaneGeometry(stripW, stripH), Mats.windowOff);
-            back.position.set(0, height * 0.4, -depth / 2 - 0.01);
-            back.rotation.y = Math.PI;
-            group.add(back);
-            windowMeshes.push(back);
-
-            const left = new THREE.Mesh(new THREE.PlaneGeometry(sideW, stripH), Mats.windowOff);
-            left.rotation.y = Math.PI / 2;
-            left.position.set(width / 2 + 0.01, height * 0.4, 0);
-            group.add(left);
-            windowMeshes.push(left);
-
-            const right = new THREE.Mesh(new THREE.PlaneGeometry(sideW, stripH), Mats.windowOff);
-            right.rotation.y = -Math.PI / 2;
-            right.position.set(-width / 2 - 0.01, height * 0.4, 0);
-            group.add(right);
-            windowMeshes.push(right);
+        const wMat = Mats.windowOff;
+        const wRows = Math.floor(height / 1.0);
+        const wColsW = Math.floor(width / 0.8);
+        const wColsD = Math.floor(depth / 0.8);
+        for (let row = 0; row < wRows; row++) {
+            const wy = 0.5 + row * 1.0;
+            if (wy > height - 0.5) break;
+            for (let col = 0; col < wColsW; col++) {
+                const wx = -width/2 + 0.4 + col * (width/wColsW);
+                const w1 = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.55), wMat.clone());
+                w1.position.set(wx, wy, depth/2 + 0.01); group.add(w1); windowMeshes.push(w1);
+                const w2 = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.55), wMat.clone());
+                w2.position.set(wx, wy, -depth/2 - 0.01); w2.rotation.y = Math.PI; group.add(w2); windowMeshes.push(w2);
+            }
+            for (let col = 0; col < wColsD; col++) {
+                const wz = -depth/2 + 0.4 + col * (depth/wColsD);
+                const w3 = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.55), wMat.clone());
+                w3.rotation.y = Math.PI/2; w3.position.set(width/2+0.01, wy, wz); group.add(w3); windowMeshes.push(w3);
+                const w4 = new THREE.Mesh(new THREE.PlaneGeometry(0.35, 0.55), wMat.clone());
+                w4.rotation.y = -Math.PI/2; w4.position.set(-width/2-0.01, wy, wz); group.add(w4); windowMeshes.push(w4);
+            }
         }
         group.userData.windowMeshes = windowMeshes;
 
-        // Roof / top details based on zone
-        if (zone === 'downtown' && height > 12) {
-            // Tall skyscraper: antenna + top section
-            const topW = width * 0.55, topD = depth * 0.55, topH = 2 + Math.random() * 2;
-            const top = new THREE.Mesh(
-                new THREE.BoxGeometry(topW, topH, topD),
-                new THREE.MeshPhongMaterial({ color: wallColor & 0xcccccc, shininess: 60 })
-            );
-            top.position.y = height + topH / 2;
-            group.add(top);
-
-            const antenna = new THREE.Mesh(this.geos.antenna, Mats.antenna);
-            antenna.position.y = height + topH + 1;
-            group.add(antenna);
-            group.userData.hasTopLight = true;
-        } else if (zone === 'downtown' && height > 8) {
-            // Medium downtown: step-back top
-            const topW = width * 0.65, topD = depth * 0.65, topH = 1.5 + Math.random();
-            const top = new THREE.Mesh(
-                new THREE.BoxGeometry(topW, topH, topD),
-                new THREE.MeshPhongMaterial({ color: wallColor & 0xbbbbbb })
-            );
-            top.position.y = height + topH / 2;
-            group.add(top);
-        } else if (zone === 'commercial' && height > 5) {
-            // Flat roof with edge
-            const edge = new THREE.Mesh(
-                new THREE.BoxGeometry(width + 0.2, 0.2, depth + 0.2),
-                new THREE.MeshPhongMaterial({ color: wallColor & 0xaaaaaa })
-            );
-            edge.position.y = height + 0.1;
-            group.add(edge);
-        } else {
-            // Residential: sloped roof or flat with color
-            if (absN > 0.3) {
-                // Sloped roof
-                const roofH = Math.max(width, depth) * 0.35;
-                const roof = new THREE.Mesh(
-                    new THREE.ConeGeometry(Math.max(width, depth) * 0.72, roofH, 4),
-                    new THREE.MeshPhongMaterial({ color: 0x884433, flatShading: true })
-                );
-                roof.position.y = height + roofH / 2;
-                roof.rotation.y = Math.PI / 4;
-                group.add(roof);
-            } else {
-                // Flat roof
-                const edge = new THREE.Mesh(
-                    new THREE.BoxGeometry(width + 0.15, 0.15, depth + 0.15),
-                    new THREE.MeshPhongMaterial({ color: wallColor & 0xcccccc })
-                );
-                edge.position.y = height + 0.075;
-                group.add(edge);
+        // === Style-specific details ===
+        if (buildingStyle === 'twin_tower') {
+            const th = height * 0.35, tw = width * 0.35, td = depth * 0.8;
+            for (const s of [-1, 1]) {
+                const t = new THREE.Mesh(new THREE.BoxGeometry(tw, th, td),
+                    new THREE.MeshPhongMaterial({ color: wallColor.clone().offsetHSL(0,0,0.05), shininess: 70 }));
+                t.position.set(s*width*0.25, height+th/2, 0); t.castShadow = true; group.add(t);
             }
+        } else if (buildingStyle === 'setback') {
+            for (let s = 0; s < 3; s++) {
+                const sc = 1 - s * 0.2, sh = height * 0.15;
+                const t = new THREE.Mesh(new THREE.BoxGeometry(width*sc, sh, depth*sc),
+                    new THREE.MeshPhongMaterial({ color: wallColor.clone().offsetHSL(0,0,0.03*s), shininess: 60 }));
+                t.position.y = height + s*sh + sh/2; t.castShadow = true; group.add(t);
+            }
+        } else if (buildingStyle === 'dome_top') {
+            const r = Math.min(width, depth) * 0.4;
+            const d = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 8, 0, Math.PI*2, 0, Math.PI/2),
+                new THREE.MeshPhongMaterial({ color: 0x88aa88, shininess: 60, transparent: true, opacity: 0.7 }));
+            d.position.y = height; d.castShadow = true; group.add(d);
+        } else if (buildingStyle === 'crown') {
+            const ch = height * 0.15;
+            const c = new THREE.Mesh(new THREE.CylinderGeometry(width*0.35, width*0.45, ch, 8),
+                new THREE.MeshPhongMaterial({ color: 0x888888, shininess: 80 }));
+            c.position.y = height + ch/2; c.castShadow = true; group.add(c);
+        } else if (buildingStyle === 'brick' || buildingStyle === 'brick_low') {
+            const rh = 0.5, rows = Math.floor(height / rh);
+            for (let r = 0; r < rows; r++) {
+                const l = new THREE.Mesh(new THREE.BoxGeometry(width+0.01, 0.02, depth+0.01),
+                    new THREE.MeshPhongMaterial({ color: 0x554433 }));
+                l.position.y = r * rh + 0.25; group.add(l);
+            }
+        } else if (buildingStyle === 'cottage') {
+            const roofH = Math.max(width, depth) * 0.45;
+            const r = new THREE.Mesh(new THREE.ConeGeometry(Math.max(width,depth)*0.72, roofH, 4),
+                new THREE.MeshPhongMaterial({ color: 0x884422, flatShading: true }));
+            r.position.y = height + roofH/2; r.rotation.y = Math.PI/4; r.castShadow = true; group.add(r);
+        } else if (buildingStyle === 'cream_mid' || buildingStyle === 'cream_low') {
+            const roofH = Math.max(width, depth) * 0.3;
+            const r = new THREE.Mesh(new THREE.ConeGeometry(Math.max(width,depth)*0.72, roofH, 4),
+                new THREE.MeshPhongMaterial({ color: 0xcc6644, flatShading: true }));
+            r.position.y = height + roofH/2; r.rotation.y = Math.PI/4; r.castShadow = true; group.add(r);
+        } else if (zone === 'downtown' && height > 8) {
+            // Antenna for tall buildings
+            const a = new THREE.Mesh(this.geos.antenna, Mats.antenna);
+            a.position.y = height + 1; group.add(a);
+            group.userData.hasTopLight = true;
         }
 
-        const yPos = isCity ? 0 : Math.max(baseH, 0);
-        group.position.set(x, yPos, z);
+        // Interior light
+        const il = new THREE.PointLight(0xffcc66, 0, 30, 1.5);
+        il.position.set(0, height * 0.5, 0); group.add(il);
+        group.userData.interiorLight = il;
+
+        group.position.set(x, isCity ? 0 : Math.max(baseH, 0), z);
         this.group.add(group);
         this.cityBuildings.push(group);
     }
