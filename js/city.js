@@ -1903,49 +1903,53 @@ class CitySystem {
             const move = ud.currentSpeed * dt * 2.5;
             ud.progress += move / Math.max(road.length, 0.1);
 
-            // === ROAD END — smoothly switch to crossing road at intersection ===
+            // === ROAD END — find crossing road, switch WITHOUT moving ===
             if (ud.progress >= 1.0) {
                 ud.progress = 1.0;
 
-                // Update position to road endpoint first (no jump)
-                const ep = road.end;
-                v.position.x = isH ? ep.x : ep.x + ud.lane;
-                v.position.z = isH ? ep.z + ud.lane : ep.z;
+                // Record current world position
+                const carX = v.position.x;
+                const carZ = v.position.z;
 
-                // Find a perpendicular road that crosses at this endpoint
+                // Find a perpendicular road that passes through this position
                 let bestRoad = null;
                 let bestProj = 0;
                 let bestDist = Infinity;
                 for (const r of this.roads) {
                     if (r === road) continue;
                     const rh = Math.abs(r.dir.z) < 0.1;
-                    if (rh === isH) continue; // same axis, skip
-                    // Project the endpoint onto this road
-                    const rx = r.start.x + r.dir.x * r.length * 0.5;
-                    const rz = r.start.z + r.dir.z * r.length * 0.5;
-                    const d = Math.abs(rx - ep.x) + Math.abs(rz - ep.z);
-                    if (d < 3.0 && d < bestDist) {
-                        bestDist = d;
+                    if (rh === isH) continue;
+                    // Project car position onto candidate road
+                    let proj, dist;
+                    if (rh) {
+                        proj = (carX - r.start.x) / Math.max(r.length, 0.1);
+                        const roadZ = r.start.z + r.dir.z * r.length * proj;
+                        dist = Math.abs(roadZ - carZ);
+                    } else {
+                        proj = (carZ - r.start.z) / Math.max(r.length, 0.1);
+                        const roadX = r.start.x + r.dir.x * r.length * proj;
+                        dist = Math.abs(roadX - carX);
+                    }
+                    if (proj >= -0.1 && proj <= 1.1 && dist < 2.0 && dist < bestDist) {
+                        bestDist = dist;
                         bestRoad = r;
-                        // Compute where along r the car should be
-                        if (rh) bestProj = (ep.x - r.start.x) / Math.max(r.length, 0.1);
-                        else bestProj = (ep.z - r.start.z) / Math.max(r.length, 0.1);
+                        bestProj = proj;
                     }
                 }
 
                 if (bestRoad) {
-                    // Smoothly switch to the crossing road at the intersection
-                    ud.oldRoad = road;
                     ud.road = bestRoad;
                     ud.progress = Math.max(0.02, Math.min(0.98, bestProj));
                     ud.lane = 0.5;
                     ud.turning = true;
                     ud.turnTimer = 0;
                 } else {
+                    // No crossing road — start over
                     ud.progress = 0.02;
                 }
             }
 
+            // Position from current road segment (same world position, no jump)
             const curRoad = ud.road || road;
             const curIsH = Math.abs(curRoad.dir.z) < 0.1;
             const cpx = curRoad.start.x + curRoad.dir.x * curRoad.length * ud.progress;
