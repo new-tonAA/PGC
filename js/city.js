@@ -1847,20 +1847,20 @@ class CitySystem {
                 continue;
             }
 
-            // Turning animation — rotate at intersection
+            // Turning animation — smooth rotation when switching roads
             if (ud.turning) {
                 ud.turnTimer += dt;
-                const targetR = ud.turnTargetIsH ? (ud.turnTargetDir > 0 ? 0 : Math.PI) : (ud.turnTargetDir > 0 ? Math.PI/2 : -Math.PI/2);
+                const newRoad = ud.road;
+                const newIsH = newRoad ? Math.abs(newRoad.dir.z) < 0.1 : false;
+                const targetR = newIsH ? 0 : Math.PI/2;
                 let diff = targetR - v.rotation.y;
                 while (diff > Math.PI) diff -= Math.PI*2;
                 while (diff < -Math.PI) diff += Math.PI*2;
-                v.rotation.y += diff * Math.min(1, dt * 8);
-                if (ud.turnTimer >= 0.35) {
+                v.rotation.y += diff * Math.min(1, dt * 10);
+                if (ud.turnTimer >= 0.3) {
                     ud.turning = false;
-                    ud.isHorizontal = ud.turnTargetIsH;
-                    ud.direction = ud.turnTargetDir;
-                    ud.currentSpeed = ud.speed;
                     v.rotation.y = targetR;
+                    ud.currentSpeed = Math.max(ud.currentSpeed, ud.speed * 0.5);
                 }
                 continue;
             }
@@ -1903,30 +1903,46 @@ class CitySystem {
             const move = ud.currentSpeed * dt * 2.5;
             ud.progress += move / Math.max(road.length, 0.1);
 
-            // === ROAD END — find a connecting crossing road ===
+            // === ROAD END — smoothly switch to crossing road at intersection ===
             if (ud.progress >= 1.0) {
                 ud.progress = 1.0;
-                let turned = false;
+
+                // Update position to road endpoint first (no jump)
                 const ep = road.end;
+                v.position.x = isH ? ep.x : ep.x + ud.lane;
+                v.position.z = isH ? ep.z + ud.lane : ep.z;
+
+                // Find a perpendicular road that crosses at this endpoint
+                let bestRoad = null;
+                let bestProj = 0;
+                let bestDist = Infinity;
                 for (const r of this.roads) {
                     if (r === road) continue;
                     const rh = Math.abs(r.dir.z) < 0.1;
-                    if (rh === isH) continue;
+                    if (rh === isH) continue; // same axis, skip
+                    // Project the endpoint onto this road
                     const rx = r.start.x + r.dir.x * r.length * 0.5;
                     const rz = r.start.z + r.dir.z * r.length * 0.5;
-                    if (Math.abs(rx - ep.x) < 3.0 && Math.abs(rz - ep.z) < 3.0) {
-                        ud.turning = true; ud.turnTimer = 0;
-                        ud.turnTargetIsH = rh; ud.turnTargetDir = 1;
-                        ud.road = r;
-                        ud.progress = 0.05;
-                        ud.lane = 0.5;
-                        turned = true;
-                        break;
+                    const d = Math.abs(rx - ep.x) + Math.abs(rz - ep.z);
+                    if (d < 3.0 && d < bestDist) {
+                        bestDist = d;
+                        bestRoad = r;
+                        // Compute where along r the car should be
+                        if (rh) bestProj = (ep.x - r.start.x) / Math.max(r.length, 0.1);
+                        else bestProj = (ep.z - r.start.z) / Math.max(r.length, 0.1);
                     }
                 }
-                if (!turned) {
-                    // Dead end — reset to start of this road
-                    ud.progress = 0.05;
+
+                if (bestRoad) {
+                    // Smoothly switch to the crossing road at the intersection
+                    ud.oldRoad = road;
+                    ud.road = bestRoad;
+                    ud.progress = Math.max(0.02, Math.min(0.98, bestProj));
+                    ud.lane = 0.5;
+                    ud.turning = true;
+                    ud.turnTimer = 0;
+                } else {
+                    ud.progress = 0.02;
                 }
             }
 
