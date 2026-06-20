@@ -1863,26 +1863,33 @@ class CitySystem {
                 continue;
             }
 
-            // 转弯动画
+            // 转弯动画：沿贝塞尔弧线平滑过渡
             if (ud.turning) {
                 ud.turnTimer += dt;
-                const newRoad = ud.road;
-                const newIsH = newRoad ? Math.abs(newRoad.dir.z) < 0.1 : false;
-                // FIX: 转弯目标朝向需考虑 reverse 方向
-                let targetR;
-                if (newIsH) {
-                    targetR = ud.reverse ? Math.PI : 0;
-                } else {
-                    targetR = ud.reverse ? -Math.PI / 2 : Math.PI / 2;
-                }
+                const t = Math.min(1, ud.turnTimer / 0.35);
+
+                // 缓动函数
+                const s = t * t * (3 - 2 * t);
+
+                // 二次贝塞尔：B(t) = (1-t)²·P0 + 2(1-t)t·P1 + t²·P2
+                const u = 1 - s;
+                v.position.x = u*u * (ud.turnStartX||0) + 2*u*s * (ud.turnMidX||0) + s*s * (ud.turnEndX||0);
+                v.position.z = u*u * (ud.turnStartZ||0) + 2*u*s * (ud.turnMidZ||0) + s*s * (ud.turnEndZ||0);
+                v.position.y = (this.terrain
+                    ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3
+                    : v.position.y);
+
+                // 旋转平滑过渡
+                const targetR = ud.turnTargetR || 0;
                 let diff = targetR - v.rotation.y;
                 while (diff > Math.PI) diff -= Math.PI * 2;
                 while (diff < -Math.PI) diff += Math.PI * 2;
-                v.rotation.y += diff * Math.min(1, dt * 10);
-                if (ud.turnTimer >= 0.3) {
+                v.rotation.y += diff * Math.min(1, dt * 12);
+
+                if (t >= 1) {
                     ud.turning = false;
                     v.rotation.y = targetR;
-                    ud.currentSpeed = Math.max(ud.currentSpeed, ud.speed * 0.5);
+                    ud.currentSpeed = Math.max(ud.currentSpeed, ud.speed * 0.3);
                 }
                 continue;
             }
@@ -2025,7 +2032,33 @@ class CitySystem {
                         }
                         ud.progress = Math.max(0.01, Math.min(0.99, ud.progress));
 
-                        ud.turning   = beforeIsH !== afterIsH;
+                        // 转弯弧线：记录起点(旧路末端)、终点(新路入口)、控制点(路口外角)
+                        if (beforeIsH !== afterIsH) {
+                            ud.turning    = true;
+                            ud.turnTimer  = 0;
+                            // 起点 = 车在旧路末端的位置
+                            ud.turnStartX = savedX;
+                            ud.turnStartZ = savedZ;
+                            // 终点 = 车在新路上的位置
+                            const nIsH = afterIsH;
+                            const npx = nextRoad.start.x + nextRoad.dir.x * nextRoad.length * ud.progress;
+                            const npz = nextRoad.start.z + nextRoad.dir.z * nextRoad.length * ud.progress;
+                            ud.turnEndX = nIsH ? npx : npx + ud.lane;
+                            ud.turnEndZ = nIsH ? npz + ud.lane : npz;
+                            // 控制点 = 路口外角：取 (endX, startZ) 或 (startX, endZ)
+                            const caX = ud.turnEndX, caZ = ud.turnStartZ;
+                            const cbX = ud.turnStartX, cbZ = ud.turnEndZ;
+                            const caDist = Math.abs(caX - (ud.turnStartX+ud.turnEndX)/2) + Math.abs(caZ - (ud.turnStartZ+ud.turnEndZ)/2);
+                            const cbDist = Math.abs(cbX - (ud.turnStartX+ud.turnEndX)/2) + Math.abs(cbZ - (ud.turnStartZ+ud.turnEndZ)/2);
+                            ud.turnMidX = caDist > cbDist ? caX : cbX;
+                            ud.turnMidZ = caDist > cbDist ? caZ : cbZ;
+                            // 目标朝向
+                            ud.turnTargetR = afterIsH
+                                ? (reverse ? Math.PI : 0)
+                                : (reverse ? -Math.PI/2 : Math.PI/2);
+                        } else {
+                            ud.turning = false;
+                        }
                         ud.turnTimer = 0;
                         ud.stuckTimer = 0;
                     } else {
