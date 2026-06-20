@@ -632,12 +632,18 @@ class PCGWorld {
     }
 
     scheduleRegen() {
-        if (this._regenScheduled) return;
-        this._regenScheduled = true;
+        if (this._inRegen) return;
+        this._inRegen = true;
+        // Immediately detach old objects from scene to prevent
+        // the animation loop from touching stale references
+        if (this.city) { this.city.clear(); this.city = null; }
+        if (this.houses) { this.houses.clear(); this.houses = null; }
+        if (this.vegetation) { this.vegetation.clear(); this.vegetation = null; }
+        // Small delay then rebuild
         setTimeout(() => {
-            this._regenScheduled = false;
             this.generateWorld();
-        }, 80);
+            this._inRegen = false;
+        }, 50);
     }
 
     setupUI() {
@@ -789,6 +795,8 @@ class PCGWorld {
 
     animate() {
         requestAnimationFrame(() => this.animate());
+
+        if (this._inRegen) return;
 
         const deltaTime = this.clock.getDelta();
         const time = this.clock.getElapsedTime();

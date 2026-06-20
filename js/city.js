@@ -2315,13 +2315,8 @@ class CitySystem {
     clear() {
         this.group.traverse((child) => {
             if (child.geometry) child.geometry.dispose();
-            if (child.material) {
-                if (Array.isArray(child.material)) {
-                    child.material.forEach(m => m.dispose());
-                } else {
-                    child.material.dispose();
-                }
-            }
+            // NEVER dispose materials — they may be referenced by GPU cache
+            // across regens, and dispose corrupts WebGL state
         });
         this.scene.remove(this.group);
 
