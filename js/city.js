@@ -1863,33 +1863,35 @@ class CitySystem {
                 continue;
             }
 
-            // 转弯动画：沿贝塞尔弧线平滑过渡
+            // 转弯动画：沿二次贝塞尔弧线行驶，朝向跟随曲线切线
             if (ud.turning) {
                 ud.turnTimer += dt;
-                const t = Math.min(1, ud.turnTimer / 0.35);
+                const rawT = Math.min(1, ud.turnTimer / 0.5);
+                const s = rawT * rawT * (3 - 2 * rawT); // smoothstep
 
-                // 缓动函数
-                const s = t * t * (3 - 2 * t);
-
-                // 二次贝塞尔：B(t) = (1-t)²·P0 + 2(1-t)t·P1 + t²·P2
+                // 二次贝塞尔
                 const u = 1 - s;
-                v.position.x = u*u * (ud.turnStartX||0) + 2*u*s * (ud.turnMidX||0) + s*s * (ud.turnEndX||0);
-                v.position.z = u*u * (ud.turnStartZ||0) + 2*u*s * (ud.turnMidZ||0) + s*s * (ud.turnEndZ||0);
+                const px = u*u * ud.turnStartX + 2*u*s * ud.turnMidX + s*s * ud.turnEndX;
+                const pz = u*u * ud.turnStartZ + 2*u*s * ud.turnMidZ + s*s * ud.turnEndZ;
+
+                // 下一帧位置用于计算朝向（微小的 epsilon 前进）
+                const s2 = Math.min(1, rawT + 0.02) * Math.min(1, rawT + 0.02) * (3 - 2 * Math.min(1, rawT + 0.02));
+                const u2 = 1 - s2;
+                const nx = u2*u2 * ud.turnStartX + 2*u2*s2 * ud.turnMidX + s2*s2 * ud.turnEndX;
+                const nz = u2*u2 * ud.turnStartZ + 2*u2*s2 * ud.turnMidZ + s2*s2 * ud.turnEndZ;
+                const turnAngle = Math.atan2(nx - px, nz - pz);
+
+                v.position.x = px;
+                v.position.z = pz;
                 v.position.y = (this.terrain
-                    ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3
+                    ? this.terrain.getHeight(px, pz) + 0.3
                     : v.position.y);
+                v.rotation.y = turnAngle;
 
-                // 旋转平滑过渡
-                const targetR = ud.turnTargetR || 0;
-                let diff = targetR - v.rotation.y;
-                while (diff > Math.PI) diff -= Math.PI * 2;
-                while (diff < -Math.PI) diff += Math.PI * 2;
-                v.rotation.y += diff * Math.min(1, dt * 12);
-
-                if (t >= 1) {
+                if (rawT >= 1) {
                     ud.turning = false;
-                    v.rotation.y = targetR;
                     ud.currentSpeed = Math.max(ud.currentSpeed, ud.speed * 0.3);
+                    // progress 已在切换路口时设好，车在新路上继续行驶
                 }
                 continue;
             }
@@ -2032,30 +2034,26 @@ class CitySystem {
                         }
                         ud.progress = Math.max(0.01, Math.min(0.99, ud.progress));
 
-                        // 转弯弧线：记录起点(旧路末端)、终点(新路入口)、控制点(路口外角)
+                        // 转弯弧线：控制点 = 路口外角（几何交叉点）
                         if (beforeIsH !== afterIsH) {
                             ud.turning    = true;
                             ud.turnTimer  = 0;
-                            // 起点 = 车在旧路末端的位置
+                            // 起点 = 旧路末端位置
                             ud.turnStartX = savedX;
                             ud.turnStartZ = savedZ;
-                            // 终点 = 车在新路上的位置
-                            const nIsH = afterIsH;
+                            // 终点 = 新路入口位置（lane偏移后）
                             const npx = nextRoad.start.x + nextRoad.dir.x * nextRoad.length * ud.progress;
                             const npz = nextRoad.start.z + nextRoad.dir.z * nextRoad.length * ud.progress;
-                            ud.turnEndX = nIsH ? npx : npx + ud.lane;
-                            ud.turnEndZ = nIsH ? npz + ud.lane : npz;
-                            // 控制点 = 路口外角：取 (endX, startZ) 或 (startX, endZ)
-                            const caX = ud.turnEndX, caZ = ud.turnStartZ;
-                            const cbX = ud.turnStartX, cbZ = ud.turnEndZ;
-                            const caDist = Math.abs(caX - (ud.turnStartX+ud.turnEndX)/2) + Math.abs(caZ - (ud.turnStartZ+ud.turnEndZ)/2);
-                            const cbDist = Math.abs(cbX - (ud.turnStartX+ud.turnEndX)/2) + Math.abs(cbZ - (ud.turnStartZ+ud.turnEndZ)/2);
-                            ud.turnMidX = caDist > cbDist ? caX : cbX;
-                            ud.turnMidZ = caDist > cbDist ? caZ : cbZ;
-                            // 目标朝向
-                            ud.turnTargetR = afterIsH
-                                ? (reverse ? Math.PI : 0)
-                                : (reverse ? -Math.PI/2 : Math.PI/2);
+                            ud.turnEndX = afterIsH ? npx : npx + ud.lane;
+                            ud.turnEndZ = afterIsH ? npz + ud.lane : npz;
+                            // 控制点：旧路末端按新路方向偏移 lane，形成平滑弧线
+                            // 旧路 lane 方向 ⊥ 旧路 dir，新路 lane 方向 ⊥ 新路 dir
+                            const oldLaneDir = beforeIsH ? {x:0, z:(savedZ > junctionZ ? 1 : -1)}
+                                                          : {x:(savedX > junctionX ? 1 : -1), z:0};
+                            const R = 1.0;
+                            ud.turnMidX = junctionX + oldLaneDir.x * R + (afterIsH ? 0 : ud.lane * 1.5);
+                            ud.turnMidZ = junctionZ + oldLaneDir.z * R + (afterIsH ? ud.lane * 1.5 : 0);
+                            ud.turnTargetR = 0; // unused, rotation now follows curve tangent
                         } else {
                             ud.turning = false;
                         }

@@ -698,6 +698,13 @@ class PCGWorld {
         this.updateTimeOfDay(this.state.timeOfDay);
     }
 
+    scheduleRegen() {
+        if (this._regenTimer) clearTimeout(this._regenTimer);
+        this._regenTimer = setTimeout(() => {
+            this.generateWorld();
+        }, 150);
+    }
+
     setupUI() {
         document.querySelectorAll('[data-terrain]').forEach(btn => {
             btn.addEventListener('click', () => {
