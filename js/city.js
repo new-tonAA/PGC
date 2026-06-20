@@ -210,45 +210,9 @@ class CitySystem {
             }
         }
 
-        const totalBuildings = this.buildingCount > 0 ? this.buildingCount : 60;
-        let buildingsPlaced = 0;
-
-        // Collect all valid blocks first (for even distribution)
-        const blocks = [];
-        for (let i = 0; i < roadPositionsX.length - 1; i++) {
-            for (let j = 0; j < roadPositionsZ.length - 1; j++) {
-                const x1 = roadPositionsX[i] + roadWidth / 2 + 0.8;
-                const z1 = roadPositionsZ[j] + roadWidth / 2 + 0.8;
-                const x2 = roadPositionsX[i + 1] - roadWidth / 2 - 0.8;
-                const z2 = roadPositionsZ[j + 1] - roadWidth / 2 - 0.8;
-                if (x2 - x1 < 2 || z2 - z1 < 2) continue;
-                const cx = (x1 + x2) / 2, cz = (z1 + z2) / 2;
-                const h = terrain.getHeight(cx, cz);
-                if (h < terrain.waterLevel + 0.3) continue;
-                const dist = Math.sqrt(cx * cx + cz * cz);
-                const heightFactor = Math.max(0.25, 1.0 - dist / (terrain.size * 0.45));
-                blocks.push({ x1, z1, x2, z2, h, heightFactor, cx, cz });
-            }
-        }
-
-        if (blocks.length === 0) return;
-
-        // Distribute buildings across blocks proportionally (max 4 per block)
-        const perBlock = Math.max(1, Math.ceil(totalBuildings / blocks.length));
-        const maxPerBlock = Math.min(4, perBlock);
-
-        for (const b of blocks) {
-            if (buildingsPlaced >= totalBuildings) break;
-            const toPlace = Math.min(maxPerBlock, totalBuildings - buildingsPlaced);
-            const placed = this.generateBlockN(b.x1, b.z1, b.x2, b.z2, b.h, b.heightFactor, terrain, toPlace);
-            buildingsPlaced += placed;
-        }
-
-        if (this.intersections.length > 0) {
-            this.createLandmarkBuildings(terrain, roadPositionsX, roadPositionsZ);
-        }
-
+        // === STREET LIGHTS FIRST (so buildings can avoid them) ===
         const spacing = this.lightSpacing;
+        const lightPositions = []; // track light positions for building avoidance
         const placedLightPositions = new Set();
 
         for (const road of this.roads) {
@@ -276,9 +240,63 @@ class CitySystem {
                         ? (side === -1 ? Math.PI / 2 : -Math.PI / 2)
                         : (side === -1 ? 0 : Math.PI);
                     this.createStreetLight(slx, slh, slz, terrain, armAngle);
+                    lightPositions.push({ x: slx, z: slz });
                 }
                 placedLightPositions.add(lk);
             }
+        }
+
+        // === BUILDINGS — exactly buildingCount from house slider ===
+        const totalBuildings = Math.max(1, this.buildingCount || 8);
+        let buildingsPlaced = 0;
+
+        // Collect valid blocks
+        const blocks = [];
+        for (let i = 0; i < roadPositionsX.length - 1; i++) {
+            for (let j = 0; j < roadPositionsZ.length - 1; j++) {
+                const bx1 = roadPositionsX[i] + roadWidth / 2 + 0.8;
+                const bz1 = roadPositionsZ[j] + roadWidth / 2 + 0.8;
+                const bx2 = roadPositionsX[i + 1] - roadWidth / 2 - 0.8;
+                const bz2 = roadPositionsZ[j + 1] - roadWidth / 2 - 0.8;
+                if (bx2 - bx1 < 2 || bz2 - bz1 < 2) continue;
+                const bcx = (bx1 + bx2) / 2, bcz = (bz1 + bz2) / 2;
+                if (terrain.getHeight(bcx, bcz) < terrain.waterLevel + 0.3) continue;
+                blocks.push({ x1: bx1, z1: bz1, x2: bx2, z2: bz2, cx: bcx, cz: bcz });
+            }
+        }
+
+        const maxAttempts = totalBuildings * 10;
+        for (let a = 0; a < maxAttempts && buildingsPlaced < totalBuildings; a++) {
+            const b = blocks[Math.floor(Math.random() * blocks.length)];
+            const blockH = terrain.getHeight(b.cx, b.cz);
+            const dist = Math.sqrt(b.cx * b.cx + b.cz * b.cz);
+            const hf = Math.max(0.25, 1.0 - dist / (terrain.size * 0.45));
+            const bw = 2 + Math.random() * 4;
+            const bd = 2 + Math.random() * 4;
+            const bx = b.x1 + 0.5 + Math.random() * ((b.x2 - b.x1) - bw - 0.5);
+            const bz = b.z1 + 0.5 + Math.random() * ((b.z2 - b.z1) - bd - 0.5);
+
+            // Avoid lights
+            let tooCloseToLight = false;
+            for (const lp of lightPositions) {
+                if (Math.abs(bx - lp.x) < bw/2 + 1.5 && Math.abs(bz - lp.z) < bd/2 + 1.5)
+                    { tooCloseToLight = true; break; }
+            }
+            if (tooCloseToLight) continue;
+
+            if (this.checkPenetration(bx, bz, bw, bd)) continue;
+            const bbh = terrain.getHeight(bx, bz);
+            if (bbh < terrain.waterLevel + 0.3) continue;
+
+            const hNoise = this.noise.noise2D(bx * 0.15, bz * 0.15);
+            const height = Math.max(3, 3 + Math.random() * (4 + hf * 20 + hNoise * 6));
+            this.createSkyscraper(bx, bbh, bz, bw, height, bd);
+            this.placedBuildings.push({ x: bx, z: bz, w: bw, d: bd });
+            buildingsPlaced++;
+        }
+
+        if (this.intersections.length > 0) {
+            this.createLandmarkBuildings(terrain, roadPositionsX, roadPositionsZ);
         }
 
         // Assign one-way directions based on grid cycle topology
