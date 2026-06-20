@@ -253,8 +253,8 @@ class ProceduralTerrain {
                 this.hasWater = true;
                 break;
             case 'mountains':
-                this.waterLevel = -6;
-                this.hasWater = true;
+                this.waterLevel = -10;
+                this.hasWater = false;
                 break;
             case 'plains':
                 this.waterLevel = -10;

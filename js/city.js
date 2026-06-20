@@ -273,14 +273,22 @@ class CitySystem {
                 const lh = terrain.getHeight(lx, lz);
                 if (lh < terrain.waterLevel + 0.3) continue;
 
-                // Place on both sides of the road
+                // Place on both sides of the road, each facing toward the road
                 for (const side of [-1, 1]) {
                     const offset = side * (road.width / 2 + 0.6);
                     const slx = isHoriz ? lx : lx + offset;
                     const slz = isHoriz ? lz + offset : lz;
                     const slh = terrain.getHeight(slx, slz);
                     if (slh < terrain.waterLevel + 0.3) continue;
-                    this.createStreetLight(slx, slh, slz, terrain);
+                    // Arm default points +X. Rotate group so it points toward road center.
+                    // For horiz road (along X): side=-1 means light is at -Z (south), arm points +Z (+π/2)
+                    //                        side=+1 means light is at +Z (north), arm points -Z (-π/2)
+                    // For vert road (along Z):  side=-1 means light is at -X (west), arm points +X (0)
+                    //                        side=+1 means light is at +X (east), arm points -X (π)
+                    const armAngle = isHoriz
+                        ? (side === -1 ? Math.PI / 2 : -Math.PI / 2)
+                        : (side === -1 ? 0 : Math.PI);
+                    this.createStreetLight(slx, slh, slz, terrain, armAngle);
                 }
                 placedLightPositions.add(lk);
             }
@@ -546,7 +554,7 @@ class CitySystem {
         });
     }
 
-    createStreetLight(x, h, z, terrain) {
+    createStreetLight(x, h, z, terrain, roadDirection = null) {
         const actualH = terrain.getHeight(x, z);
         const baseY = actualH + 0.05;
 
@@ -582,7 +590,7 @@ class CitySystem {
         lamp.position.set(0.8, 4.28, 0);
         group.add(lamp);
 
-        // Visible glow disc under lamp - larger and brighter
+        // Visible glow disc under lamp
         const glowGeo = new THREE.CircleGeometry(1.2, 16);
         const glowMat = new THREE.MeshBasicMaterial({
             color: 0xffffcc,
@@ -597,7 +605,7 @@ class CitySystem {
         glow.position.set(0.8, 4.15, 0);
         group.add(glow);
 
-        // Main SpotLight pointing down for ground illumination
+        // Main SpotLight pointing down to illuminate the road
         const spotLight = new THREE.SpotLight(0xffeebb, 0, 35, Math.PI / 3, 0.5, 1.5);
         spotLight.position.set(0.8, 4.2, 0);
         spotLight.target.position.set(0.8, -0.5, 0);
@@ -616,7 +624,7 @@ class CitySystem {
         sLight.castShadow = false;
         group.add(sLight);
 
-        // Ground light cone indicator (visual only, not a real light)
+        // Ground light cone indicator (visual only)
         const coneGeo = new THREE.ConeGeometry(1.5, 0.08, 8);
         const coneMat = new THREE.MeshBasicMaterial({
             color: 0xffffdd,
@@ -630,6 +638,11 @@ class CitySystem {
         cone.position.set(0.8, -0.02, 4.5);
         cone.rotation.x = -Math.PI;
         group.add(cone);
+
+        // Rotate entire group so arm points toward the road
+        if (roadDirection !== null) {
+            group.rotation.y = roadDirection;
+        }
 
         group.position.set(x, baseY, z);
         this.group.add(group);
@@ -2040,6 +2053,28 @@ class CitySystem {
                         }
                     }
 
+                    // Check if approaching a red traffic light on this route
+                    for (const tl of this.trafficLights) {
+                        const tlx = tl.group.position.x;
+                        const tlz = tl.group.position.z;
+                        const toLight = Math.sqrt((tlx - v.position.x) ** 2 + (tlz - v.position.z) ** 2);
+                        if (toLight < 5) {
+                            // Determine which light phase is red for our direction
+                            const cycleTime = 10;
+                            const phase = (time + tl.phase) % cycleTime;
+                            const isGreenH = phase < cycleTime * 0.42;
+                            const weAreH = target.isHorizontal;
+                            if ((weAreH && !isGreenH) || (!weAreH && isGreenH)) {
+                                // Red for us — slow down
+                                if (toLight < 2.0) {
+                                    ud.currentSpeed = 0;
+                                } else {
+                                    ud.currentSpeed = Math.min(ud.currentSpeed, ud.speed * (toLight - 2.0) / 3.0);
+                                }
+                            }
+                        }
+                    }
+
                     // Adaptive speed based on traffic
                     if (minDist < 4.0) {
                         // Slow down for nearby vehicles
@@ -2061,9 +2096,14 @@ class CitySystem {
                     const ny = this.terrain ? this.terrain.getHeight(nx, nz) + 0.3 : v.position.y;
                     v.position.set(nx, ny, nz);
 
-                    // Smooth rotation toward target
-                    const targetAngle = Math.atan2(dx, dz);
-                    v.rotation.y += (targetAngle - v.rotation.y) * Math.min(1, dt * 6);
+                    // Snap to road-aligned angle (0, ±π/2, π) — no diagonal drifting
+                    const targetAngle = target.isHorizontal
+                        ? (target.direction > 0 ? 0 : Math.PI)
+                        : (target.direction > 0 ? Math.PI / 2 : -Math.PI / 2);
+                    let aDiff = targetAngle - v.rotation.y;
+                    while (aDiff > Math.PI) aDiff -= Math.PI * 2;
+                    while (aDiff < -Math.PI) aDiff += Math.PI * 2;
+                    v.rotation.y += aDiff * Math.min(1, dt * 6);
                 }
             }
 
