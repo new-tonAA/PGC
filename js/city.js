@@ -64,9 +64,9 @@ class CitySystem {
     }
 
     generateGridCity(terrain, vehicleCount) {
-        const halfSize = terrain.size * 0.28;
+        const halfSize = terrain.size * 0.45;  // cover more terrain
         const densityFactor = this.roadDensity / 50;
-        const blockSize = Math.max(6, Math.round(10 / densityFactor));
+        const blockSize = Math.max(3, Math.round(5 / Math.max(densityFactor, 0.5)));
         const roadWidth = 2.2;
 
         this.halfSize = halfSize;
