@@ -1,7 +1,7 @@
 import * as THREE from 'three';
+import { Water } from 'three/addons/objects/Water.js';
 import { SimplexNoise } from './noise.js';
 
-// Vertex shader for terrain
 const terrainVertexShader = `
     varying vec2 vUv;
     varying vec3 vWorldPos;
@@ -17,24 +17,49 @@ const terrainVertexShader = `
     }
 `;
 
-// Fragment shader for terrain with height-based coloring + snow accumulation
 const terrainFragmentShader = `
     uniform vec3 uSunDir;
     uniform vec3 uSunColor;
     uniform vec3 uAmbientColor;
     uniform float uWaterLevel;
     uniform float uTime;
-    uniform float uSnowAccum; // 0.0 to 1.0 snow accumulation
+    uniform float uSnowAccum;
 
     varying vec2 vUv;
     varying vec3 vWorldPos;
     varying vec3 vNormal;
     varying float vHeight;
 
+    // Simple hash for noise in fragment shader
+    float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    float noise2D(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash(i);
+        float b = hash(i + vec2(1.0, 0.0));
+        float c = hash(i + vec2(0.0, 1.0));
+        float d = hash(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    }
+
+    float fbm2D(vec2 p) {
+        float val = 0.0;
+        float amp = 0.5;
+        for (int i = 0; i < 4; i++) {
+            val += amp * noise2D(p);
+            p *= 2.0;
+            amp *= 0.5;
+        }
+        return val;
+    }
+
     void main() {
         float h = vHeight;
 
-        // Height-based terrain colors
         vec3 deepWater = vec3(0.05, 0.15, 0.4);
         vec3 shallowWater = vec3(0.1, 0.35, 0.6);
         vec3 sand = vec3(0.76, 0.7, 0.5);
@@ -44,225 +69,97 @@ const terrainFragmentShader = `
         vec3 snow = vec3(0.95, 0.95, 0.97);
 
         vec3 color;
+
+        // Smooth transitions using smoothstep and noise for natural blending
         if (h < uWaterLevel - 1.0) {
             color = deepWater;
         } else if (h < uWaterLevel) {
-            color = mix(deepWater, shallowWater, (h - uWaterLevel + 1.0));
+            float t = smoothstep(uWaterLevel - 1.0, uWaterLevel, h);
+            color = mix(deepWater, shallowWater, t);
         } else if (h < uWaterLevel + 0.5) {
-            color = mix(shallowWater, sand, (h - uWaterLevel) / 0.5);
+            float t = smoothstep(uWaterLevel, uWaterLevel + 0.5, h);
+            // Add noise for natural sand-water edge
+            float edgeNoise = fbm2D(vWorldPos.xz * 0.5 + uTime * 0.05) * 0.3;
+            t = clamp(t + edgeNoise, 0.0, 1.0);
+            color = mix(shallowWater, sand, t);
         } else if (h < 2.0) {
-            color = mix(sand, grass, (h - uWaterLevel - 0.5) / max(2.0 - uWaterLevel - 0.5, 0.01));
+            float range = max(2.0 - uWaterLevel - 0.5, 0.01);
+            float t = smoothstep(uWaterLevel + 0.5, uWaterLevel + 0.5 + range, h);
+            // Noise-based grass/sand transition for natural look
+            float grassNoise = fbm2D(vWorldPos.xz * 2.0) * 0.4;
+            t = clamp(t + grassNoise - 0.2, 0.0, 1.0);
+            color = mix(sand, grass, t);
         } else if (h < 5.0) {
-            color = mix(grass, darkGrass, (h - 2.0) / 3.0);
+            float t = smoothstep(2.0, 5.0, h);
+            // Add variation to grass colors
+            float grassVar = fbm2D(vWorldPos.xz * 3.0) * 0.3;
+            vec3 variedGrass = grass * (1.0 + grassVar * 0.5);
+            vec3 variedDarkGrass = darkGrass * (1.0 - grassVar * 0.2);
+            color = mix(variedGrass, variedDarkGrass, t);
         } else if (h < 8.0) {
-            color = mix(darkGrass, rock, (h - 5.0) / 3.0);
+            float t = smoothstep(5.0, 8.0, h);
+            color = mix(darkGrass, rock, t);
         } else if (h < 11.0) {
-            color = mix(rock, snow, (h - 8.0) / 3.0);
+            float t = smoothstep(8.0, 11.0, h);
+            color = mix(rock, snow, t);
         } else {
             color = snow;
         }
 
-        // Water shimmer
+        // Shimmer for underwater areas
         if (h < uWaterLevel) {
             float shimmer = sin(vWorldPos.x * 3.0 + uTime * 2.0) *
                            cos(vWorldPos.z * 3.0 + uTime * 1.5) * 0.03;
             color += shimmer;
         }
 
-        // Beach foam near shoreline
-        float shoreDist = h - uWaterLevel;
-        if (shoreDist > -0.3 && shoreDist < 0.8) {
-            float foamZone = smoothstep(-0.3, 0.1, shoreDist) * smoothstep(0.8, 0.3, shoreDist);
-            float foamPattern = sin(vWorldPos.x * 4.0 + uTime * 1.8) * cos(vWorldPos.z * 3.5 + uTime * 1.2);
-            foamPattern = foamPattern * 0.5 + 0.5;
-            float waveBreak = sin(uTime * 2.5 + vWorldPos.x * 0.8) * 0.5 + 0.5;
-            float foamStrength = foamZone * foamPattern * 0.5 * waveBreak;
-            vec3 foamColor = vec3(0.92, 0.96, 1.0);
-            color = mix(color, foamColor, clamp(foamStrength, 0.0, 0.6));
-        }
-
-        // Snow accumulation effect - blend terrain color towards white
+        // Improved snow accumulation blending
         if (h >= uWaterLevel + 0.3 && uSnowAccum > 0.0) {
-            // Snow accumulates more on flat surfaces and lower elevations
-            float slope = 1.0 - abs(vNormal.y); // 0 = flat, 1 = vertical
-            float flatness = 1.0 - slope * 2.0;
+            float slope = 1.0 - vNormal.y;
+            // Better flatness: snow accumulates on flat surfaces, slides off steep ones
+            float flatness = 1.0 - slope * 3.0;
             flatness = clamp(flatness, 0.0, 1.0);
-
-            // More snow on flat ground, less on steep slopes
-            float snowBlend = uSnowAccum * flatness;
-
-            // Reduce snow on very high peaks (wind blows it off)
-            float heightFactor = 1.0;
-            if (h > 8.0) {
-                heightFactor = 1.0 - (h - 8.0) * 0.05;
-            }
-
-            snowBlend *= clamp(heightFactor, 0.3, 1.0);
-
-            // Snow color with slight variation
+            // Snow more likely at higher elevations
+            float heightFactor = smoothstep(3.0, 11.0, h);
+            // Add noise for natural snow patches
+            float snowNoise = fbm2D(vWorldPos.xz * 2.0) * 0.4;
+            float snowBlend = uSnowAccum * flatness * (heightFactor * 0.7 + 0.3 + snowNoise * 0.3);
+            snowBlend = clamp(snowBlend, 0.0, 1.0);
             vec3 snowColor = vec3(0.92, 0.94, 0.98);
-
-            color = mix(color, snowColor, clamp(snowBlend, 0.0, 1.0));
+            color = mix(color, snowColor, snowBlend);
         }
 
-        // Simple lighting
+        // Simulated ambient occlusion: darker in valleys/low areas
+        float aoFactor = smoothstep(-2.0, 5.0, h);
+        aoFactor = mix(0.7, 1.0, aoFactor);
+        // Steeper slopes also slightly darker (self-shadowing)
+        float slopeDarken = 1.0 - (1.0 - vNormal.y) * 0.15;
+        aoFactor *= slopeDarken;
+        color *= aoFactor;
+
+        // Lighting with wrap diffuse
         float diff = max(dot(vNormal, uSunDir), 0.0);
         float wrap = max(dot(vNormal, uSunDir) * 0.5 + 0.5, 0.0);
-
         vec3 lit = color * (uAmbientColor + uSunColor * wrap * 0.8);
-
         gl_FragColor = vec4(lit, 1.0);
     }
 `;
 
-// ==========================================
-// Ocean shader - animated waves, foam, caustics
-// ==========================================
-const oceanVertexShader = `
-    uniform float uTime;
-    uniform float uWaveHeight;
-
-    varying vec2 vUv;
-    varying vec3 vWorldPos;
-    varying vec3 vNormal;
-    varying float vWaveHeight;
-
-    // Simple noise for wave shape
-    vec3 mod289(vec3 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
-    vec2 mod289(vec2 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
-    vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
-
-    float snoise(vec2 v) {
-        const vec4 C = vec4(0.211324865405187, 0.366025403784439,
-                           -0.577350269189626, 0.024390243902439);
-        vec2 i  = floor(v + dot(v, C.yy));
-        vec2 x0 = v -   i + dot(i, C.xx);
-        vec2 i1;
-        i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
-        vec4 x12 = x0.xyxy + C.xxzz;
-        x12.xy -= i1;
-        i = mod289(i);
-        vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0))
-                + i.x + vec3(0.0, i1.x, 1.0));
-        vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy),
-                dot(x12.zw,x12.zw)), 0.0);
-        m = m*m;
-        m = m*m;
-        vec3 x = 2.0 * fract(p * C.www) - 1.0;
-        vec3 h = abs(x) - 0.5;
-        vec3 ox = floor(x + 0.5);
-        vec3 a0 = x - ox;
-        m *= 1.79284291400159 - 0.85373472095314 * (a0*a0+h*h);
-        vec3 g;
-        g.x  = a0.x  * x0.x  + h.x  * x0.y;
-        g.yz = a0.yz * x12.xz + h.yz * x12.yw;
-        return 130.0 * dot(m, g);
-    }
-
-    void main() {
-        vUv = uv;
-        vec3 pos = position;
-
-        // Multi-octave wave displacement
-        float wave = 0.0;
-        wave += snoise(pos.xz * 0.08 + uTime * 0.3) * 0.4;
-        wave += snoise(pos.xz * 0.15 - uTime * 0.2) * 0.2;
-        wave += snoise(pos.xz * 0.4 + uTime * 0.5) * 0.08;
-        wave += snoise(pos.xz * 0.8 - uTime * 0.3) * 0.03;
-
-        pos.y += wave * uWaveHeight;
-        vWaveHeight = wave;
-
-        // Approximate normal from wave derivatives
-        float eps = 0.5;
-        float hx = snoise((position.xz + vec2(eps, 0.0)) * 0.08 + uTime * 0.3) * 0.4
-                  + snoise((position.xz + vec2(eps, 0.0)) * 0.15 - uTime * 0.2) * 0.2;
-        float hz = snoise((position.xz + vec2(0.0, eps)) * 0.08 + uTime * 0.3) * 0.4
-                  + snoise((position.xz + vec2(0.0, eps)) * 0.15 - uTime * 0.2) * 0.2;
-
-        vec3 tangent = normalize(vec3(eps, hx * uWaveHeight - wave * uWaveHeight, 0.0));
-        vec3 bitangent = normalize(vec3(0.0, hz * uWaveHeight - wave * uWaveHeight, eps));
-        vNormal = normalize(cross(bitangent, tangent));
-
-        vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-    }
-`;
-
-const oceanFragmentShader = `
-    uniform float uTime;
-    uniform vec3 uSunDir;
-    uniform vec3 uSunColor;
-    uniform vec3 uWaterColorDeep;
-    uniform vec3 uWaterColorShallow;
-    uniform float uOpacity;
-    uniform float uWaterLevel;
-
-    varying vec2 vUv;
-    varying vec3 vWorldPos;
-    varying vec3 vNormal;
-    varying float vWaveHeight;
-
-    void main() {
-        vec3 viewDir = normalize(cameraPosition - vWorldPos);
-        vec3 normal = normalize(vNormal);
-
-        // Fresnel effect - more reflective at grazing angles
-        float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 4.0);
-        fresnel = 0.02 + 0.98 * fresnel;
-
-        // Sky reflection color
-        vec3 skyColor = vec3(0.4, 0.6, 0.9);
-
-        // Specular highlight from sun
-        vec3 halfVec = normalize(uSunDir + viewDir);
-        float spec = pow(max(dot(normal, halfVec), 0.0), 256.0);
-        float specBroad = pow(max(dot(normal, halfVec), 0.0), 32.0);
-
-        // Water base color - depth variation
-        float depthFactor = smoothstep(-2.0, 0.5, vWorldPos.y - uWaterLevel + 1.0);
-        vec3 waterColor = mix(uWaterColorDeep, uWaterColorShallow, depthFactor);
-
-        // Caustics-like pattern (subtle bright spots)
-        float caustic1 = sin(vWorldPos.x * 2.0 + uTime * 0.8) * cos(vWorldPos.z * 2.5 + uTime * 0.6);
-        float caustic2 = sin(vWorldPos.x * 3.5 - uTime * 0.5) * cos(vWorldPos.z * 1.8 + uTime * 0.9);
-        float caustics = (caustic1 + caustic2) * 0.02 + 0.02;
-        caustics = max(caustics, 0.0);
-
-        // Foam on wave crests
-        float foam = smoothstep(0.25, 0.5, vWaveHeight);
-        // Foam also near edges
-        vec3 foamColor = vec3(0.85, 0.9, 0.95);
-
-        // Combine
-        vec3 color = mix(waterColor, skyColor, fresnel);
-        color += uSunColor * spec * 2.0; // Sharp specular
-        color += uSunColor * specBroad * 0.15; // Broad specular
-        color += caustics * waterColor * 2.0;
-        color = mix(color, foamColor, foam * 0.6);
-
-        // Diffuse lighting on water
-        float diff = max(dot(normal, uSunDir), 0.0) * 0.3 + 0.7;
-        color *= diff;
-
-        gl_FragColor = vec4(color, uOpacity + foam * 0.3);
-    }
-`;
-
-
 class ProceduralTerrain {
     constructor(scene, options = {}) {
         this.scene = scene;
-        this.size = options.size || 80;
-        this.resolution = options.resolution || 200;
+        this.renderer = options.renderer || null;
+        this.size = options.size || 30;
+        this.resolution = options.resolution || 120;
         this.noise = new SimplexNoise(options.seed || 42);
         this.terrainType = options.type || 'plains';
         this.waterLevel = options.waterLevel || -2;
         this._cachedWaterLevel = this.waterLevel;
+        this.hasWater = true;
 
         this.mesh = null;
         this.waterMesh = null;
-        this.snowAccum = 0; // Current snow accumulation level
+        this.snowAccum = 0;
 
         this.material = new THREE.ShaderMaterial({
             vertexShader: terrainVertexShader,
@@ -312,32 +209,8 @@ class ProceduralTerrain {
                 break;
 
             case 'city':
-                // Flat terrain so roads are always above surface
-                h = 0;
-                break;
-
-            case 'coastal':
-                // Clear land-sea split: north = land, south = sea, beach zone in middle
-                const sz = this.size;
-                const coastLineZ = sz * -0.15; // Shoreline at this z
-                const distFromCoast = z - coastLineZ;
-                const beachW = 5;
-
-                if (distFromCoast > beachW) {
-                    // Inland - gentle rolling terrain
-                    h = this.noise.fbm(x * scale * 0.5, z * scale * 0.5, 3) * 2.5;
-                    h += this.noise.fbm(x * scale * 2, z * scale * 2, 2) * 0.3;
-                } else if (distFromCoast > 0) {
-                    // Beach zone - smooth transition from waterLevel to land
-                    const t = distFromCoast / beachW;
-                    h = this.waterLevel + t * 1.5;
-                    h += this.noise.fbm(x * scale, z * scale, 2) * 0.2 * t;
-                } else {
-                    // Ocean floor - well below water
-                    const t = Math.min(1, Math.abs(distFromCoast) / (sz * 0.3));
-                    h = this.waterLevel - 0.5 - t * 3;
-                    h += this.noise.fbm(x * scale * 0.3, z * scale * 0.3, 2) * 0.2;
-                }
+                h = this.noise.fbm(x * scale * 0.2, z * scale * 0.2, 2) * 0.3;
+                h = Math.max(h, 0);
                 break;
 
             default:
@@ -360,7 +233,6 @@ class ProceduralTerrain {
     }
 
     generate() {
-        // Remove old terrain
         if (this.mesh) {
             this.scene.remove(this.mesh);
             this.mesh.geometry.dispose();
@@ -370,23 +242,32 @@ class ProceduralTerrain {
             this.waterMesh.geometry.dispose();
         }
 
-        // Set water level based on terrain type
+        // Set water levels per terrain type
         switch (this.terrainType) {
             case 'islands':
                 this.waterLevel = 0;
+                this.hasWater = true;
+                break;
+            case 'coastal':
+                this.waterLevel = -1;
+                this.hasWater = true;
                 break;
             case 'mountains':
-                this.waterLevel = -5;
+                this.waterLevel = -6;
+                this.hasWater = true;
+                break;
+            case 'plains':
+                this.waterLevel = -10;
+                this.hasWater = false;
                 break;
             case 'suburban':
             case 'city':
-                this.waterLevel = -3;
-                break;
-            case 'coastal':
-                this.waterLevel = -0.5;
+                this.waterLevel = -10;
+                this.hasWater = false;
                 break;
             default:
-                this.waterLevel = -2;
+                this.waterLevel = -3;
+                this.hasWater = true;
         }
 
         const geo = new THREE.PlaneGeometry(
@@ -408,60 +289,39 @@ class ProceduralTerrain {
         this.mesh.receiveShadow = true;
         this.scene.add(this.mesh);
 
-        // Ocean with GLSL shader
-        this.createOcean();
+        if (this.hasWater) {
+            this.createOcean();
+        } else {
+            this.waterMesh = null;
+        }
     }
 
     createOcean() {
-        const waterSize = this.size * 2;
-        const waterRes = 128; // Enough resolution for waves
-
-        const waterGeo = new THREE.PlaneGeometry(waterSize, waterSize, waterRes, waterRes);
-        waterGeo.rotateX(-Math.PI / 2);
-
-        // Island terrain gets different water colors
         const isIsland = this.terrainType === 'islands';
-        const isCoastal = this.terrainType === 'coastal';
-        const isCity = this.terrainType === 'city' || this.terrainType === 'suburban';
+        const waterSize = isIsland ? this.size * 1.5 : this.size * 1.15;
 
-        const deepColor = isIsland
-            ? new THREE.Color(0.02, 0.12, 0.35)
-            : isCoastal
-                ? new THREE.Color(0.02, 0.15, 0.4)
-            : isCity
-                ? new THREE.Color(0.03, 0.1, 0.3)
-                : new THREE.Color(0.05, 0.15, 0.4);
+        const waterGeo = new THREE.PlaneGeometry(waterSize, waterSize);
 
-        const shallowColor = isIsland
-            ? new THREE.Color(0.05, 0.45, 0.65)
-            : isCoastal
-                ? new THREE.Color(0.08, 0.42, 0.62)
-            : isCity
-                ? new THREE.Color(0.08, 0.3, 0.5)
-                : new THREE.Color(0.1, 0.35, 0.6);
-
-        const opacity = isIsland ? 0.75 : isCoastal ? 0.72 : 0.7;
-
-        const waterMat = new THREE.ShaderMaterial({
-            vertexShader: oceanVertexShader,
-            fragmentShader: oceanFragmentShader,
-            uniforms: {
-                uTime: { value: 0 },
-                uSunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
-                uSunColor: { value: new THREE.Color(1.0, 0.95, 0.8) },
-                uWaterColorDeep: { value: deepColor },
-                uWaterColorShallow: { value: shallowColor },
-                uOpacity: { value: opacity },
-                uWaterLevel: { value: this.waterLevel },
-                uWaveHeight: { value: isIsland ? 0.6 : isCoastal ? 0.35 : isCity ? 0.2 : 0.4 }
-            },
-            transparent: true,
-            depthWrite: false,
-            side: THREE.DoubleSide
+        this.waterMesh = new Water(waterGeo, {
+            textureWidth: 256,
+            textureHeight: 256,
+            waterNormals: new THREE.TextureLoader().load(
+                'https://unpkg.com/three@0.160.0/examples/textures/waternormals.jpg',
+                (texture) => {
+                    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+                }
+            ),
+            sunDirection: new THREE.Vector3(0.5, 0.8, 0.3).normalize(),
+            sunColor: 0xffffff,
+            waterColor: isIsland ? 0x001a2e : 0x001e0f,
+            distortionScale: isIsland ? 4.0 : 3.2,
+            fog: false,
+            alpha: isIsland ? 0.92 : 0.88,
+            clipBias: 0.0,
         });
 
-        this.waterMesh = new THREE.Mesh(waterGeo, waterMat);
-        this.waterMesh.position.y = this.waterLevel - 0.1;
+        this.waterMesh.rotation.x = -Math.PI / 2;
+        this.waterMesh.position.y = this.waterLevel;
         this.scene.add(this.waterMesh);
     }
 
@@ -477,34 +337,30 @@ class ProceduralTerrain {
         this.material.uniforms.uTime.value = time;
         this.material.uniforms.uSnowAccum.value = this.snowAccum;
 
-        // Update ocean
         if (this.waterMesh) {
-            this.waterMesh.material.uniforms.uTime.value = time;
+            this.waterMesh.material.uniforms['time'].value += 1.0 / 60.0;
         }
     }
 
-    // Update snow accumulation
     updateSnowAccum(isSnowing, deltaTime) {
         if (isSnowing) {
-            // Accumulate over ~30 seconds
             this.snowAccum = Math.min(1.0, this.snowAccum + deltaTime * 0.033);
         } else {
-            // Melt over ~15 seconds
             this.snowAccum = Math.max(0.0, this.snowAccum - deltaTime * 0.067);
         }
     }
 
     setSunDirection(dir) {
         this.material.uniforms.uSunDir.value.copy(dir).normalize();
-        if (this.waterMesh) {
-            this.waterMesh.material.uniforms.uSunDir.value.copy(dir).normalize();
+        if (this.waterMesh && this.waterMesh.material.uniforms['sunDirection']) {
+            this.waterMesh.material.uniforms['sunDirection'].value.copy(dir).normalize();
         }
     }
 
     setSunColor(color) {
         this.material.uniforms.uSunColor.value.copy(color);
-        if (this.waterMesh) {
-            this.waterMesh.material.uniforms.uSunColor.value.copy(color);
+        if (this.waterMesh && this.waterMesh.material.uniforms['sunColor']) {
+            this.waterMesh.material.uniforms['sunColor'].value.copy(color);
         }
     }
 
@@ -512,10 +368,15 @@ class ProceduralTerrain {
         this.material.uniforms.uAmbientColor.value.copy(color);
     }
 
-    // Find a flat spot for house placement - improved with multiple candidates
+    setSkyColor(color) {
+        // Water plugin doesn't use a separate sky color uniform
+        // It uses sunDirection and sunColor for reflections
+    }
+
     findFlatSpot(centerX = 0, centerZ = 0, radius = 30) {
         const candidates = [];
         const attempts = 150;
+        const halfSize = this.size * 0.5;
 
         for (let attempt = 0; attempt < attempts; attempt++) {
             const angle = Math.random() * Math.PI * 2;
@@ -523,23 +384,36 @@ class ProceduralTerrain {
             const x = centerX + Math.cos(angle) * dist;
             const z = centerZ + Math.sin(angle) * dist;
 
+            // Skip if outside terrain bounds
+            if (Math.abs(x) > halfSize || Math.abs(z) > halfSize) continue;
+
             const h = this.getHeight(x, z);
-            const hN = this.getHeight(x + 1, z);
-            const hS = this.getHeight(x - 1, z);
-            const hE = this.getHeight(x, z + 1);
-            const hW = this.getHeight(x, z - 1);
 
-            const slope = Math.abs(h - hN) + Math.abs(h - hS) +
-                         Math.abs(h - hE) + Math.abs(h - hW);
+            // Better slope calculation using gradient magnitude
+            const grad = this.getGradient(x, z);
+            const slopeMag = Math.sqrt(grad.dx * grad.dx + grad.dz * grad.dz);
 
-            if (h > this.waterLevel + 0.5 && slope < 2.0) {
-                candidates.push({ x, y: h, z, slope });
+            // Only consider spots above water and not too steep
+            if (h > this.waterLevel + 0.5 && slopeMag < 1.5) {
+                // Preference for spots near center (closer to roads)
+                const distFromCenter = Math.sqrt(x * x + z * z);
+                const centerPreference = 1.0 - distFromCenter / radius;
+
+                // Preference for slightly elevated spots (not in valleys)
+                const elevationPreference = Math.min(h / 3.0, 1.0);
+
+                // Combined score: lower is better (slope dominates, center/elevation as bonuses)
+                const score = slopeMag * 2.0 - centerPreference - elevationPreference * 0.5;
+
+                candidates.push({ x, y: h, z, slope: slopeMag, score });
             }
         }
 
         if (candidates.length === 0) return null;
 
-        candidates.sort((a, b) => a.slope - b.slope);
+        // Sort by score (best = lowest)
+        candidates.sort((a, b) => a.score - b.score);
+        // Pick from top candidates with some randomness
         const topN = Math.min(5, candidates.length);
         return candidates[Math.floor(Math.random() * topN)];
     }

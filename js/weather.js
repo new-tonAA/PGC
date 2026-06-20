@@ -117,8 +117,8 @@ class WeatherSystem {
         }
     }
 
-    createRain(count = 8000) {
-        const bounds = 60;
+    createRain(count = 6000) {
+        const bounds = 50;
         const positions = new Float32Array(count * 3);
         const speeds = new Float32Array(count);
         const offsets = new Float32Array(count);
@@ -156,8 +156,8 @@ class WeatherSystem {
         this.scene.fog = new THREE.FogExp2(0x555566, 0.015);
     }
 
-    createSnow(count = 5000) {
-        const bounds = 60;
+    createSnow(count = 4000) {
+        const bounds = 50;
         const positions = new Float32Array(count * 3);
         const speeds = new Float32Array(count);
         const offsets = new Float32Array(count);
@@ -168,9 +168,9 @@ class WeatherSystem {
             positions[i * 3 + 1] = Math.random() * bounds;
             positions[i * 3 + 2] = (Math.random() - 0.5) * bounds;
 
-            speeds[i] = 0.5 + Math.random() * 0.5;
+            speeds[i] = 0.3 + Math.random() * 0.5;
             offsets[i] = Math.random();
-            sizes[i] = 2.0 + Math.random() * 4.0;
+            sizes[i] = 2.5 + Math.random() * 5.0;
         }
 
         const geometry = new THREE.BufferGeometry();
@@ -194,8 +194,8 @@ class WeatherSystem {
         this.particles = new THREE.Points(geometry, material);
         this.scene.add(this.particles);
 
-        // Light fog for snow
-        this.scene.fog = new THREE.FogExp2(0xccccdd, 0.012);
+        // Light fog for snow - slightly denser for cozy feel
+        this.scene.fog = new THREE.FogExp2(0xdddde8, 0.014);
     }
 
     createFog() {

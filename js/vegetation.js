@@ -944,6 +944,55 @@ class VegetationSystem {
         }
     }
 
+    // PCG incremental: remove trees overlapping with new house positions
+    removeOverlappingTrees(housePositions) {
+        const toRemove = [];
+
+        for (let i = this.group.children.length - 1; i >= 0; i--) {
+            const child = this.group.children[i];
+            const cx = child.position.x;
+            const cz = child.position.z;
+
+            for (const hp of housePositions) {
+                const dx = cx - hp.x;
+                const dz = cz - hp.z;
+                if (Math.sqrt(dx * dx + dz * dz) < hp.radius + 1.5) {
+                    toRemove.push(child);
+                    break;
+                }
+            }
+        }
+
+        for (const child of toRemove) {
+            this.group.remove(child);
+            child.traverse((c) => {
+                if (c.geometry) c.geometry.dispose();
+                if (c.material) {
+                    if (Array.isArray(c.material)) {
+                        c.material.forEach(m => m.dispose());
+                    } else {
+                        c.material.dispose();
+                    }
+                }
+            });
+        }
+
+        // Update placedTrees tracking
+        this.placedTrees = this.placedTrees.filter(pt => {
+            for (const hp of housePositions) {
+                const dx = pt.x - hp.x;
+                const dz = pt.z - hp.z;
+                if (Math.sqrt(dx * dx + dz * dz) < hp.radius + 1.5) {
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        // Reset snow caps flag since trees changed
+        this._snowCapsAdded = false;
+    }
+
     clear() {
         this.group.traverse((child) => {
             if (child.geometry) child.geometry.dispose();
@@ -958,6 +1007,94 @@ class VegetationSystem {
         this.scene.remove(this.group);
         this.group = new THREE.Group();
         this.placedTrees = [];
+        this._snowCapsAdded = false;
+    }
+
+    updateSnowAccum(isSnowing, deltaTime) {
+        if (isSnowing) {
+            this.snowAccum = Math.min(1.0, (this.snowAccum || 0) + deltaTime * 0.033);
+        } else {
+            this.snowAccum = Math.max(0.0, (this.snowAccum || 0) - deltaTime * 0.067);
+        }
+
+        // Add snow caps on canopy meshes
+        if (!this._snowCapsAdded && this.snowAccum > 0.05) {
+            this._addSnowCaps();
+        }
+
+        this.group.traverse(child => {
+            if (child.isMesh && child.geometry) {
+                const geoType = child.geometry.type;
+                const isCanopy = geoType === 'SphereGeometry' ||
+                    geoType === 'IcosahedronGeometry' ||
+                    geoType === 'ConeGeometry';
+
+                if (isCanopy && child.material && !child.userData.isTrunk) {
+                    if (!child.userData.originalColor) {
+                        child.userData.originalColor = child.material.color.clone();
+                    }
+                    // Stronger snow blending for more visible accumulation
+                    const snowColor = new THREE.Color(0.92, 0.94, 0.98);
+                    const blendFactor = this.snowAccum * 0.75;
+                    child.material.color.copy(child.userData.originalColor).lerp(snowColor, blendFactor);
+                    
+                    // Add slight emissive to snow-covered canopy for visibility at night
+                    if (this.snowAccum > 0.3) {
+                        child.material.emissive = new THREE.Color(0x222233);
+                        child.material.emissiveIntensity = this.snowAccum * 0.08;
+                    } else if (child.material.emissive) {
+                        child.material.emissiveIntensity = 0;
+                    }
+                }
+            }
+        });
+
+        // Update snow cap meshes visibility
+        this.group.traverse(child => {
+            if (child.userData && child.userData.isSnowCap) {
+                child.visible = this.snowAccum > 0.15;
+                if (child.visible) {
+                    child.material.opacity = Math.min(0.95, this.snowAccum * 1.2);
+                    child.scale.set(1, 0.3 + this.snowAccum * 0.7, 1);
+                }
+            }
+        });
+    }
+
+    _addSnowCaps() {
+        this._snowCapsAdded = true;
+        const snowCapMat = new THREE.MeshPhongMaterial({
+            color: 0xf0f0f5,
+            flatShading: true,
+            transparent: true,
+            opacity: 0.9
+        });
+
+        this.group.children.forEach(treeGroup => {
+            if (!treeGroup.isGroup) return;
+            let topMesh = null;
+            let topY = -Infinity;
+            treeGroup.traverse(child => {
+                if (child.isMesh && child.position.y > topY) {
+                    const geoType = child.geometry.type;
+                    if (geoType === 'SphereGeometry' || geoType === 'ConeGeometry' || geoType === 'IcosahedronGeometry') {
+                        topY = child.position.y;
+                        topMesh = child;
+                    }
+                }
+            });
+            if (topMesh) {
+                const r = (topMesh.geometry.parameters && topMesh.geometry.parameters.radius) || 0.5;
+                const snowGeo = new THREE.CylinderGeometry(r * 0.7, r * 0.9, 0.2, 8);
+                const snowCap = new THREE.Mesh(snowGeo, snowCapMat.clone());
+                // Position above the canopy
+                const canopyTop = topMesh.position.y + (r || 0.5) * 0.8;
+                snowCap.position.set(topMesh.position.x * 0.5, canopyTop, topMesh.position.z * 0.5);
+                snowCap.userData.isSnowCap = true;
+                snowCap.visible = false;
+                treeGroup.add(snowCap);
+            }
+        });
     }
 }
 

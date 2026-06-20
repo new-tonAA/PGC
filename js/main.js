@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Sky } from 'three/addons/objects/Sky.js';
 import { ProceduralTerrain } from './terrain.js';
-import { ProceduralHouse } from './house.js';
+import { ProceduralHouse, SETTLEMENT_TYPES } from './house.js';
 import { FireSystem } from './fire.js';
 import { WeatherSystem } from './weather.js';
 import { CitySystem } from './city.js';
@@ -21,19 +22,24 @@ class PCGWorld {
         this.city = null;
         this.vegetation = null;
         this.clock = new THREE.Clock();
+        this.sunMesh = null;
+        this.sky = null;
+        this.starField = null;
 
         this.state = {
             terrainType: 'plains',
+            settlementType: 'village',
             houseCount: 8,
             vehicleCount: 5,
+            roadDensity: 50,
+            lightSpacing: 12,
             weather: 'clear',
             fireActive: false,
             lightsOn: false,
             timeOfDay: 12,
-            seed: 42
+            seed: 42,
+            starDensity: 0
         };
-
-        this._regenTimer = null;
 
         this.init();
         this.setupUI();
@@ -47,15 +53,9 @@ class PCGWorld {
         this.camera = new THREE.PerspectiveCamera(
             60, window.innerWidth / window.innerHeight, 0.1, 500
         );
-        this.camera.position.set(25, 20, 25);
+        this.camera.position.set(20, 15, 20);
 
-        try {
-            this.renderer = new THREE.WebGLRenderer({ antialias: true });
-        } catch (e) {
-            const loading = document.getElementById('loading');
-            loading.innerHTML = '<div style="color:#f44;font-size:12px;text-align:center;padding:20px;font-family:Consolas,monospace;">WebGL init failed: ' + e.message + '</div>';
-            return;
-        }
+        this.renderer = new THREE.WebGLRenderer({ antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.shadowMap.enabled = true;
@@ -69,10 +69,12 @@ class PCGWorld {
         this.controls.dampingFactor = 0.05;
         this.controls.maxPolarAngle = Math.PI / 2.1;
         this.controls.minDistance = 5;
-        this.controls.maxDistance = 120;
+        this.controls.maxDistance = 100;
         this.controls.target.set(0, 2, 0);
 
         this.setupLighting();
+        this.createStarField();
+        this.createSky();
         this.generateWorld();
 
         window.addEventListener('resize', () => this.onResize());
@@ -82,101 +84,386 @@ class PCGWorld {
         setTimeout(() => loading.style.display = 'none', 500);
     }
 
+    createSky() {
+        this.sky = new Sky();
+        this.sky.scale.setScalar(450000);
+        this.scene.add(this.sky);
+
+        const sunGeo = new THREE.SphereGeometry(3, 16, 16);
+        const sunMat = new THREE.MeshBasicMaterial({ color: 0xffffcc });
+        this.sunMesh = new THREE.Mesh(sunGeo, sunMat);
+        this.scene.add(this.sunMesh);
+    }
+
+    createStarField() {
+        const count = 3000;
+        const positions = new Float32Array(count * 3);
+        const sizes = new Float32Array(count);
+
+        for (let i = 0; i < count; i++) {
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            const r = 180;
+            positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+            positions[i * 3 + 1] = Math.abs(r * Math.cos(phi));
+            positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+            sizes[i] = 0.5 + Math.random() * 2.0;
+        }
+
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+
+        const mat = new THREE.ShaderMaterial({
+            vertexShader: `
+                attribute float aSize;
+                uniform float uDensity;
+                uniform float uTime;
+                varying float vTwinkle;
+                void main() {
+                    vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+                    gl_Position = projectionMatrix * mvPos;
+                    gl_PointSize = aSize * uDensity * (200.0 / -mvPos.z);
+                    vTwinkle = sin(uTime * (1.0 + aSize) + position.x * 10.0) * 0.3 + 0.7;
+                }
+            `,
+            fragmentShader: `
+                uniform float uDensity;
+                varying float vTwinkle;
+                void main() {
+                    float d = length(gl_PointCoord - vec2(0.5));
+                    if (d > 0.5) discard;
+                    float alpha = (1.0 - d * 2.0);
+                    alpha *= alpha;
+                    gl_FragColor = vec4(1.0, 1.0, 0.95, alpha * vTwinkle * uDensity);
+                }
+            `,
+            uniforms: {
+                uDensity: { value: 0.0 },
+                uTime: { value: 0 }
+            },
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+
+        this.starField = new THREE.Points(geo, mat);
+        this.scene.add(this.starField);
+    }
+
     setupLighting() {
         this.ambientLight = new THREE.AmbientLight(0x6688aa, 0.5);
         this.scene.add(this.ambientLight);
 
-        this.sunLight = new THREE.DirectionalLight(0xfff5e0, 1.2);
+        this.sunLight = new THREE.DirectionalLight(0xfff5e0, 1.5);
         this.sunLight.position.set(30, 40, 20);
         this.sunLight.castShadow = true;
         this.sunLight.shadow.mapSize.width = 2048;
         this.sunLight.shadow.mapSize.height = 2048;
-        this.sunLight.shadow.camera.near = 1;
-        this.sunLight.shadow.camera.far = 120;
-        this.sunLight.shadow.camera.left = -40;
-        this.sunLight.shadow.camera.right = 40;
-        this.sunLight.shadow.camera.top = 40;
-        this.sunLight.shadow.camera.bottom = -40;
+        this.sunLight.shadow.camera.near = 0.5;
+        this.sunLight.shadow.camera.far = 100;
+        this.sunLight.shadow.camera.left = -30;
+        this.sunLight.shadow.camera.right = 30;
+        this.sunLight.shadow.camera.top = 30;
+        this.sunLight.shadow.camera.bottom = -30;
+        this.sunLight.shadow.bias = -0.0003;
+        this.sunLight.shadow.normalBias = 0.02;
         this.scene.add(this.sunLight);
 
-        this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x3a5f0b, 0.4);
+        this.hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x3a5f0b, 0.5);
         this.scene.add(this.hemiLight);
 
         this.updateTimeOfDay(this.state.timeOfDay);
     }
 
     updateTimeOfDay(time) {
-        const angle = ((time - 6) / 12) * Math.PI;
-        const sunY = Math.sin(angle);
-        const sunX = Math.cos(angle);
+        // Sun orbits in a full circle - realistic rotation
+        // time=12 = noon (sun at highest), time=0/24 = midnight (sun at lowest)
+        const sunAngle = ((time - 6) / 24) * Math.PI * 2;
+        const sunY = Math.sin(sunAngle);
+        const sunX = Math.cos(sunAngle);
+        const sunZ = Math.sin(sunAngle * 0.5) * 0.15;
 
-        this.sunLight.position.set(sunX * 40, Math.max(sunY * 40, 1), 20);
+        const sunDistance = 400;
+        const sunPos = new THREE.Vector3(
+            sunX * sunDistance,
+            sunY * sunDistance,
+            sunZ * sunDistance
+        );
 
-        if (time >= 6 && time <= 18) {
-            const dayFactor = Math.sin(angle);
-            const warmth = time < 10 ? 0.8 : (time > 16 ? 0.6 : 1.0);
+        // Update Sky shader with dynamic turbidity
+        if (this.sky) {
+            const skyUniforms = this.sky.material.uniforms;
+            const sunElevation = sunY;
+            // More turbidity at low sun angles (hazy sunrise/sunset)
+            skyUniforms['turbidity'].value = 2 + Math.max(0, 1 - sunElevation) * 6;
+            skyUniforms['rayleigh'].value = 0.8 + Math.max(0, 1 - sunElevation) * 1.5;
+            skyUniforms['mieCoefficient'].value = 0.005 + Math.max(0, 1 - sunElevation) * 0.02;
+            skyUniforms['mieDirectionalG'].value = 0.8;
 
-            this.sunLight.intensity = dayFactor * 1.5;
-            this.sunLight.color.setHSL(0.1 * (1 - warmth), 0.3, 0.7 + dayFactor * 0.3);
-            this.ambientLight.intensity = 0.3 + dayFactor * 0.3;
-            this.hemiLight.intensity = 0.3 + dayFactor * 0.3;
+            const sunDirection = sunPos.clone().normalize();
+            skyUniforms['sunPosition'].value.copy(sunDirection.multiplyScalar(400));
+        }
 
-            const skyH = 0.58;
-            const skyS = 0.5 + dayFactor * 0.3;
-            const skyL = 0.3 + dayFactor * 0.4;
-            this.scene.background.setHSL(skyH, skyS, skyL);
+        // Sun light follows the orbit
+        const sunLightPos = sunPos.clone().normalize().multiplyScalar(60);
+        this.sunLight.position.copy(sunLightPos);
 
-            const sunDir = new THREE.Vector3(sunX, Math.max(sunY, 0.1), 0.3).normalize();
+        // Visual sun mesh
+        if (this.sunMesh) {
+            this.sunMesh.position.copy(this.sunLight.position);
+            this.sunMesh.visible = sunY > -0.05;
+            // Sun size increases near horizon (atmospheric lensing effect)
+            const horizonFactor = Math.max(0, 1 - Math.abs(sunY) * 2);
+            this.sunMesh.scale.setScalar(1 + horizonFactor * 1.5);
+            this.sunMesh.material.color.setHSL(0.12, 0.8, 0.6 + horizonFactor * 0.3);
+        }
+
+        const isDaytime = sunY > 0.02;
+        const dayFactor = Math.max(0, Math.min(1, sunY));
+        const sunElevation = sunY;
+
+        // Smooth dawn/dusk transitions
+        const dawnStart = 4.5, dawnEnd = 7, duskStart = 17, duskEnd = 19.5;
+        const isDawn = time >= dawnStart && time <= dawnEnd;
+        const isDusk = time >= duskStart && time <= duskEnd;
+        const dawnFactor = isDawn ? Math.min(1, (time - dawnStart) / (dawnEnd - dawnStart)) : 0;
+        const duskFactor = isDusk ? Math.min(1, (duskEnd - time) / (duskEnd - duskStart)) : 0;
+        const twilightFactor = Math.max(dawnFactor, duskFactor);
+        const lowSunFactor = Math.max(0, 1.0 - Math.abs(sunElevation) * 3.5);
+        const isTwilight = isDawn || isDusk;
+
+        if (isDaytime) {
+            // Sun color: warm at sunrise/sunset, white at noon
+            const sunWarmth = lowSunFactor * 0.9;
+            this.sunLight.intensity = 0.1 + dayFactor * 1.6;
+            this.sunLight.color.setHSL(
+                0.08 + sunWarmth * 0.05,           // hue: slightly warmer at low angles
+                0.2 + sunWarmth * 0.5,             // saturation: more colorful sunrise/sunset
+                0.55 + dayFactor * 0.35 - sunWarmth * 0.15 // lightness: brighter at noon
+            );
+
+            // Ambient light
+            this.ambientLight.intensity = 0.15 + dayFactor * 0.35;
+            this.ambientLight.color.setHSL(
+                isTwilight ? 0.07 : 0.55,
+                isTwilight ? 0.2 + lowSunFactor * 0.2 : 0.25,
+                0.2 + dayFactor * 0.3
+            );
+
+            // Hemisphere light
+            this.hemiLight.intensity = 0.2 + dayFactor * 0.35;
+            this.hemiLight.color.setHSL(
+                isTwilight ? 0.07 : 0.55,
+                isTwilight ? 0.25 : 0.3,
+                0.4 + dayFactor * 0.3
+            );
+            this.hemiLight.groundColor.setHSL(
+                isTwilight ? 0.08 : 0.35,
+                0.3,
+                0.1 + dayFactor * 0.15
+            );
+
+            // Scene background
+            if (isTwilight) {
+                this.scene.background.setHSL(
+                    0.06 + (1 - twilightFactor) * 0.5,
+                    0.3 + twilightFactor * 0.3,
+                    0.25 + dayFactor * 0.4
+                );
+            } else {
+                this.scene.background.setHSL(0.55, 0.35, 0.45 + dayFactor * 0.35);
+            }
+
+            // Terrain shader updates
+            const sunDir = new THREE.Vector3(sunX, Math.max(sunY, 0.05), sunZ).normalize();
             if (this.terrain) {
                 this.terrain.setSunDirection(sunDir);
                 this.terrain.setSunColor(this.sunLight.color.clone().multiplyScalar(this.sunLight.intensity));
                 this.terrain.setAmbientColor(this.ambientLight.color.clone().multiplyScalar(this.ambientLight.intensity));
+                this.terrain.setSkyColor(new THREE.Color(isTwilight ? 0.6 : 0.4, isTwilight ? 0.4 : 0.6, isTwilight ? 0.3 : 0.9));
             }
         } else {
-            this.sunLight.intensity = 0.15;
-            this.sunLight.color.setHSL(0.65, 0.4, 0.4);
-            this.ambientLight.intensity = 0.15;
-            this.ambientLight.color.setHSL(0.65, 0.3, 0.2);
-            this.hemiLight.intensity = 0.1;
-            this.scene.background.setHSL(0.65, 0.4, 0.08);
+            // Nighttime - deeper but still visible
+            const nightDepth = Math.min(1, Math.abs(sunY) * 2);
+            this.sunLight.intensity = 0.04;
+            this.sunLight.color.setHSL(0.6, 0.1, 0.25);
+            this.ambientLight.intensity = 0.08 + nightDepth * 0.02;
+            this.ambientLight.color.setHSL(0.6, 0.08, 0.08 + nightDepth * 0.04);
+            this.hemiLight.intensity = 0.02 + nightDepth * 0.01;
+            this.hemiLight.color.setHSL(0.6, 0.05, 0.06);
 
             if (this.terrain) {
-                this.terrain.setSunDirection(new THREE.Vector3(0, 1, 0));
-                this.terrain.setSunColor(new THREE.Color(0.1, 0.1, 0.2));
-                this.terrain.setAmbientColor(new THREE.Color(0.05, 0.05, 0.15));
+                this.terrain.setSunDirection(new THREE.Vector3(0, 0.5, 0));
+                this.terrain.setSunColor(new THREE.Color(0.02, 0.02, 0.04));
+                this.terrain.setAmbientColor(new THREE.Color(0.015, 0.015, 0.03));
+                this.terrain.setSkyColor(new THREE.Color(0.015, 0.015, 0.04));
+            }
+
+            this.scene.background.setHSL(0.62, 0.12, 0.04 + nightDepth * 0.02);
+        }
+
+        // Tone mapping exposure
+        if (isDaytime) {
+            this.renderer.toneMappingExposure = 0.4 + dayFactor * 0.8;
+        } else if (isTwilight) {
+            this.renderer.toneMappingExposure = 0.35;
+        } else {
+            this.renderer.toneMappingExposure = 0.2;
+        }
+
+        // Star field visibility
+        const starDensity = this.state.starDensity / 100;
+        const isNight = time < 4.5 || time > 19.5;
+        if (this.starField) {
+            let starAlpha = 0;
+            if (isNight) {
+                starAlpha = starDensity;
+            } else if (isDawn) {
+                starAlpha = starDensity * Math.max(0, 1 - dawnFactor);
+            } else if (isDusk) {
+                starAlpha = starDensity * duskFactor;
+            }
+            this.starField.material.uniforms.uDensity.value = starAlpha;
+        }
+
+        // Manage all lights based on time and toggle state
+        this.updateAllLights(time);
+    }
+
+    updateAllLights(time) {
+        const nightFactor = (time < 6 || time > 18) ? 1.0 :
+            (time < 8 ? (8 - time) / 2 : (time > 16 ? (time - 16) / 2 : 0));
+
+        if (this.state.lightsOn) {
+            // House interior lights
+            if (this.houses) {
+                for (const house of this.houses.houses) {
+                    if (house.userData.interiorLight) {
+                        house.userData.interiorLight.intensity = nightFactor * 15.0;
+                    }
+                }
+            }
+            // City building lights - stronger for visible ground illumination
+            if (this.city) {
+                for (const bld of this.city.cityBuildings) {
+                    if (bld.userData.interiorLight) {
+                        bld.userData.interiorLight.intensity = nightFactor * 15.0;
+                    }
+                    if (bld.userData.windowMeshes) {
+                        for (const w of bld.userData.windowMeshes) {
+                            w.material.emissiveIntensity = nightFactor * 1.5;
+                        }
+                    }
+                    if (bld.userData.signLight) {
+                        bld.userData.signLight.intensity = nightFactor * 8.0;
+                    }
+                    if (bld.userData.beamLight) {
+                        bld.userData.beamLight.intensity = nightFactor * 12.0;
+                    }
+                    if (bld.userData.topLight) {
+                        bld.userData.topLight.intensity = nightFactor * 4.0;
+                    }
+                    if (bld.userData.lanternGlow) {
+                        bld.userData.lanternGlow.intensity = nightFactor * 4.0;
+                    }
+                }
+                // Street lights - bright ground illumination
+                for (const sl of this.city.streetLightLamps) {
+                    if (sl.spotLight) {
+                        sl.spotLight.intensity = nightFactor * 18.0;
+                    }
+                    if (sl.pointLight) {
+                        sl.pointLight.intensity = nightFactor * 10.0;
+                    }
+                    if (sl.lampMat) {
+                        const isOn = nightFactor > 0.15;
+                        sl.lampMat.opacity = isOn ? 0.95 : 0.25;
+                        sl.lampMat.color.set(isOn ? 0xffffdd : 0x666666);
+                        if (sl.lampMat.emissive !== undefined) {
+                            sl.lampMat.emissive.set(isOn ? 0xffffcc : 0x000000);
+                            sl.lampMat.emissiveIntensity = isOn ? nightFactor * 2.5 : 0;
+                        }
+                    }
+                    if (sl.glowMat) {
+                        sl.glowMat.opacity = nightFactor * 0.75;
+                    }
+                    if (sl.coneMat) {
+                        sl.coneMat.opacity = nightFactor * 0.2;
+                    }
+                }
+                // Vehicle headlights - maximum realism
+                for (const v of this.city.vehicles) {
+                    if (v.userData.headlight) {
+                        v.userData.headlight.intensity = nightFactor * 15.0;
+                    }
+                    if (v.userData.headlightPoint) {
+                        v.userData.headlightPoint.intensity = nightFactor * 6.0;
+                    }
+                    if (v.userData.tailLightMat) {
+                        v.userData.tailLightMat.emissiveIntensity = nightFactor * 1.2;
+                    }
+                }
+            }
+        } else {
+            // Lights off - zero everything
+            if (this.houses) {
+                for (const house of this.houses.houses) {
+                    if (house.userData.interiorLight) {
+                        house.userData.interiorLight.intensity = 0;
+                    }
+                }
+            }
+            if (this.city) {
+                for (const bld of this.city.cityBuildings) {
+                    if (bld.userData.interiorLight) {
+                        bld.userData.interiorLight.intensity = 0;
+                    }
+                    if (bld.userData.windowMeshes) {
+                        for (const w of bld.userData.windowMeshes) {
+                            w.material.emissiveIntensity = 0;
+                        }
+                    }
+                    if (bld.userData.signLight) bld.userData.signLight.intensity = 0;
+                    if (bld.userData.beamLight) bld.userData.beamLight.intensity = 0;
+                    if (bld.userData.topLight) bld.userData.topLight.intensity = 0;
+                    if (bld.userData.lanternGlow) bld.userData.lanternGlow.intensity = 0;
+                }
+                for (const sl of this.city.streetLightLamps) {
+                    if (sl.spotLight) sl.spotLight.intensity = 0;
+                    if (sl.pointLight) sl.pointLight.intensity = 0;
+                    if (sl.lampMat) {
+                        sl.lampMat.opacity = 0.25;
+                        sl.lampMat.color.set(0x666666);
+                        if (sl.lampMat.emissive !== undefined) {
+                            sl.lampMat.emissiveIntensity = 0;
+                        }
+                    }
+                    if (sl.glowMat) sl.glowMat.opacity = 0;
+                    if (sl.coneMat) sl.coneMat.opacity = 0;
+                }
+                for (const v of this.city.vehicles) {
+                    if (v.userData.headlight) {
+                        v.userData.headlight.intensity = 0;
+                    }
+                    if (v.userData.headlightPoint) {
+                        v.userData.headlightPoint.intensity = 0;
+                    }
+                    if (v.userData.tailLightMat) {
+                        v.userData.tailLightMat.emissiveIntensity = 0;
+                    }
+                }
             }
         }
-
-        if ((time >= 5 && time <= 7) || (time >= 17 && time <= 19)) {
-            const sunsetFactor = time < 12
-                ? 1 - Math.abs(time - 6)
-                : 1 - Math.abs(time - 18);
-            this.scene.background.lerpHSL(new THREE.Color(0xff6633), sunsetFactor * 0.3);
-        }
-
-        this.renderer.toneMappingExposure = time >= 6 && time <= 18
-            ? 0.8 + Math.sin(angle) * 0.4
-            : 0.4;
     }
 
     needsCitySystem() {
-        return this.state.terrainType === 'islands' ||
-               this.state.terrainType === 'city' ||
-               this.state.terrainType === 'coastal' ||
-               this.state.terrainType === 'suburban';
-    }
-
-    getHouseSettlementType() {
-        switch (this.state.terrainType) {
-            case 'suburban': return 'suburban';
-            case 'islands': return 'village';
-            case 'coastal': return 'village';
-            default: return 'village';
-        }
+        return this.state.settlementType === 'city' ||
+               this.state.terrainType === 'city';
     }
 
     generateWorld() {
-        // Cleanup
+        // Full regeneration - terrain + everything
         if (this.terrain) {
             if (this.terrain.mesh) this.scene.remove(this.terrain.mesh);
             if (this.terrain.waterMesh) this.scene.remove(this.terrain.waterMesh);
@@ -184,29 +471,30 @@ class PCGWorld {
         if (this.fire) this.fire.clear();
         if (this.city) this.city.clear();
         if (this.vegetation) this.vegetation.clear();
+        if (this.houses) this.houses.clear();
 
-        // Terrain
         this.terrain = new ProceduralTerrain(this.scene, {
-            size: 60,
-            resolution: 180,
+            size: 30,
+            resolution: 120,
             seed: this.state.seed,
-            type: this.state.terrainType
+            type: this.state.terrainType,
+            renderer: this.renderer
         });
 
-        // City system
+        if (!this.city) {
+            this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
+        }
+
         if (this.needsCitySystem()) {
-            if (!this.city) {
-                this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
-            }
-            this.city.generate(this.terrain, this.state.seed, this.state.vehicleCount, this.state.houseCount);
+            this.city.generate(this.terrain, this.state.seed, this.state.vehicleCount, {
+                roadDensity: this.state.roadDensity,
+                lightSpacing: this.state.lightSpacing
+            });
             if (this.state.lightsOn) {
                 this.city.setLights(true);
             }
-        } else if (this.city) {
-            this.city.clear();
         }
 
-        // Houses
         if (!this.houses) {
             this.houses = new ProceduralHouse(this.scene, new SimplexNoise(this.state.seed));
         } else {
@@ -214,7 +502,7 @@ class PCGWorld {
         }
 
         if (!this.needsCitySystem() || this.state.terrainType === 'islands') {
-            this.houses.settlementType = this.getHouseSettlementType();
+            this.houses.settlementType = this.state.settlementType;
             const count = this.state.terrainType === 'islands'
                 ? Math.min(this.state.houseCount, 5)
                 : this.state.houseCount;
@@ -223,22 +511,17 @@ class PCGWorld {
             if (this.state.lightsOn) {
                 this.houses.setInteriorLights(true);
             }
-        } else {
-            this.houses.clear();
         }
 
-        // Fire system
         if (!this.fire) {
             this.fire = new FireSystem(this.scene);
         }
 
-        // Weather
         if (!this.weather) {
             this.weather = new WeatherSystem(this.scene, this.camera);
         }
         this.weather.setWeather(this.state.weather);
 
-        // Vegetation
         if (!this.vegetation) {
             this.vegetation = new VegetationSystem(this.scene, new SimplexNoise(this.state.seed));
         } else {
@@ -252,7 +535,7 @@ class PCGWorld {
         }));
 
         const roadPositions = [];
-        if (this.city && this.city.intersections) {
+        if (this.needsCitySystem() && this.city.intersections) {
             for (const inter of this.city.intersections) {
                 roadPositions.push({ x: inter.x, z: inter.z });
             }
@@ -260,14 +543,13 @@ class PCGWorld {
 
         this.vegetation.generate(this.terrain, {
             seed: this.state.seed,
-            settlementType: this.getHouseSettlementType(),
+            settlementType: this.state.settlementType,
             housePositions,
             roadPositions
         });
 
         this.updateTimeOfDay(this.state.timeOfDay);
 
-        // Fire
         if (this.state.fireActive) {
             this.fire.placeFiresAtHouses(this.houses.houses);
             const centerSpot = this.terrain.findFlatSpot(0, 0, 10);
@@ -277,33 +559,162 @@ class PCGWorld {
         }
     }
 
-    // Debounced regeneration for sliders
-    scheduleRegen() {
-        if (this._regenTimer) clearTimeout(this._regenTimer);
-        this._regenTimer = setTimeout(() => {
-            this.fire.clear();
-            this.state.fireActive = false;
-            const fireBtn = document.getElementById('toggleFire');
-            if (fireBtn) {
-                fireBtn.classList.remove('active');
-                fireBtn.textContent = 'FIRE';
+    regenerateTerrain() {
+        if (this.terrain) {
+            if (this.terrain.mesh) this.scene.remove(this.terrain.mesh);
+            if (this.terrain.waterMesh) this.scene.remove(this.terrain.waterMesh);
+        }
+        this.terrain = new ProceduralTerrain(this.scene, {
+            size: 30,
+            resolution: 120,
+            seed: this.state.seed,
+            type: this.state.terrainType,
+            renderer: this.renderer
+        });
+        this.updateTimeOfDay(this.state.timeOfDay);
+
+        // Reposition houses and buildings to new terrain heights
+        if (this.houses) {
+            for (const house of this.houses.houses) {
+                const h = this.terrain.getHeight(house.position.x, house.position.z);
+                house.position.y = h;
             }
-            this.generateWorld();
-        }, 150);
+        }
+        if (this.city && this.city.cityBuildings) {
+            for (const bld of this.city.cityBuildings) {
+                const h = this.terrain.getHeight(bld.position.x, bld.position.z);
+                bld.position.y = h;
+            }
+        }
+        if (this.city && this.city.vehicles) {
+            for (const v of this.city.vehicles) {
+                if (!v.userData.isBoat) {
+                    const h = this.terrain.getHeight(v.position.x, v.position.z);
+                    v.position.y = h + 0.3;
+                }
+            }
+        }
+    }
+
+    regenerateSettlement() {
+        // Save vehicle count to preserve across settlement regeneration
+        const savedVehicleCount = this.state.vehicleCount;
+
+        if (this.city) this.city.clear();
+        if (this.houses) this.houses.clear();
+        if (this.vegetation) this.vegetation.clear();
+
+        if (this.needsCitySystem()) {
+            // Regenerate city layout (roads + buildings) without vehicles
+            this.city.generate(this.terrain, this.state.seed, 0, {
+                roadDensity: this.state.roadDensity,
+                lightSpacing: this.state.lightSpacing,
+                skipVehicles: true
+            });
+            if (this.state.lightsOn) this.city.setLights(true);
+            // Then regenerate vehicles separately
+            this.city.regenerateVehicles(this.terrain, savedVehicleCount);
+        }
+
+        if (!this.needsCitySystem() || this.state.terrainType === 'islands') {
+            this.houses.settlementType = this.state.settlementType;
+            const count = this.state.terrainType === 'islands'
+                ? Math.min(this.state.houseCount, 5)
+                : this.state.houseCount;
+            this.houses.generateMultiple(this.terrain, count);
+            if (this.state.lightsOn) this.houses.setInteriorLights(true);
+        }
+
+        const housePositions = this.houses.houses.map(h => ({
+            x: h.position.x, z: h.position.z,
+            radius: h.userData.boundingRadius || 3
+        }));
+        const roadPositions = [];
+        if (this.needsCitySystem() && this.city.intersections) {
+            for (const inter of this.city.intersections) {
+                roadPositions.push({ x: inter.x, z: inter.z });
+            }
+        }
+        this.vegetation.generate(this.terrain, {
+            seed: this.state.seed,
+            settlementType: this.state.settlementType,
+            housePositions, roadPositions
+        });
+
+        // Apply current light state to all lights
+        this.updateTimeOfDay(this.state.timeOfDay);
+    }
+
+    regenerateVehicles() {
+        if (!this.city || !this.needsCitySystem()) return;
+        this.city.regenerateVehicles(this.terrain, this.state.vehicleCount);
+        this.updateTimeOfDay(this.state.timeOfDay);
+    }
+
+    // PCG incremental: update house count without full regeneration
+    // Only adds/removes houses, keeps existing ones in place
+    updateHouseCount() {
+        if (!this.houses) return;
+
+        const newCount = this.state.terrainType === 'islands'
+            ? Math.min(this.state.houseCount, 5)
+            : this.state.houseCount;
+
+        // Only update houses in non-city modes (or islands which have both)
+        if (!this.needsCitySystem() || this.state.terrainType === 'islands') {
+            const oldCount = this.houses.houses.length;
+
+            if (newCount > oldCount) {
+                // Add new houses incrementally - existing houses stay unchanged
+                this.houses.settlementType = this.state.settlementType;
+                const added = this.houses.addHouses(this.terrain, newCount - oldCount);
+
+                // Remove vegetation overlapping with new houses only
+                if (this.vegetation && added > 0) {
+                    const newHousePositions = this.houses.houses.slice(oldCount).map(h => ({
+                        x: h.position.x, z: h.position.z,
+                        radius: h.userData.boundingRadius || 3
+                    }));
+                    this.vegetation.removeOverlappingTrees(newHousePositions);
+                }
+            } else if (newCount < oldCount) {
+                // Remove excess houses - earlier houses stay in same positions/styles
+                this.houses.removeHouses(oldCount - newCount);
+            }
+
+            if (this.state.lightsOn) {
+                this.houses.setInteriorLights(true);
+            }
+        }
+
+        this.updateTimeOfDay(this.state.timeOfDay);
     }
 
     setupUI() {
-        // Terrain buttons - auto regenerate
         document.querySelectorAll('[data-terrain]').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('[data-terrain]').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 this.state.terrainType = btn.dataset.terrain;
-                this.scheduleRegen();
+
+                if (btn.dataset.terrain === 'city') {
+                    this.state.settlementType = 'city';
+                } else if (btn.dataset.terrain === 'islands') {
+                    this.state.settlementType = 'village';
+                }
+                this.generateWorld();
             });
         });
 
-        // Weather - live update (no full regen needed)
+        document.querySelectorAll('[data-settlement]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('[data-settlement]').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                this.state.settlementType = btn.dataset.settlement;
+                this.regenerateSettlement();
+            });
+        });
+
         document.querySelectorAll('[data-weather]').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('[data-weather]').forEach(b => b.classList.remove('active'));
@@ -313,30 +724,57 @@ class PCGWorld {
             });
         });
 
-        // House slider - auto regen
         const houseSlider = document.getElementById('houseCount');
         const houseVal = document.getElementById('houseCountVal');
         houseSlider.addEventListener('input', () => {
             this.state.houseCount = parseInt(houseSlider.value);
             houseVal.textContent = houseSlider.value;
-            this.scheduleRegen();
+        });
+        houseSlider.addEventListener('change', () => {
+            this.updateHouseCount();
         });
 
-        // Vehicle slider - auto regen
         const vehicleSlider = document.getElementById('vehicleCount');
         const vehicleVal = document.getElementById('vehicleCountVal');
-        vehicleSlider.addEventListener('input', () => {
-            this.state.vehicleCount = parseInt(vehicleSlider.value);
-            vehicleVal.textContent = vehicleSlider.value;
-            this.scheduleRegen();
-        });
+        if (vehicleSlider) {
+            vehicleSlider.addEventListener('input', () => {
+                this.state.vehicleCount = parseInt(vehicleSlider.value);
+                vehicleVal.textContent = vehicleSlider.value;
+            });
+            vehicleSlider.addEventListener('change', () => {
+                this.regenerateVehicles();
+            });
+        }
 
-        // Fire toggle - live update
+        const roadDensitySlider = document.getElementById('roadDensity');
+        const roadDensityVal = document.getElementById('roadDensityVal');
+        if (roadDensitySlider) {
+            roadDensitySlider.addEventListener('input', () => {
+                this.state.roadDensity = parseInt(roadDensitySlider.value);
+                roadDensityVal.textContent = roadDensitySlider.value;
+            });
+            roadDensitySlider.addEventListener('change', () => {
+                this.regenerateSettlement();
+            });
+        }
+
+        const lightSpacingSlider = document.getElementById('lightSpacing');
+        const lightSpacingVal = document.getElementById('lightSpacingVal');
+        if (lightSpacingSlider) {
+            lightSpacingSlider.addEventListener('input', () => {
+                this.state.lightSpacing = parseInt(lightSpacingSlider.value);
+                lightSpacingVal.textContent = lightSpacingSlider.value;
+            });
+            lightSpacingSlider.addEventListener('change', () => {
+                this.regenerateSettlement();
+            });
+        }
+
         const fireBtn = document.getElementById('toggleFire');
         fireBtn.addEventListener('click', () => {
             this.state.fireActive = !this.state.fireActive;
             fireBtn.classList.toggle('active', this.state.fireActive);
-            fireBtn.textContent = this.state.fireActive ? 'FIRE ON' : 'FIRE';
+            fireBtn.textContent = this.state.fireActive ? 'Fire ON' : 'Fire OFF';
             if (this.state.fireActive) {
                 this.fire.placeFiresAtHouses(this.houses.houses);
                 const centerSpot = this.terrain.findFlatSpot(0, 0, 10);
@@ -348,17 +786,16 @@ class PCGWorld {
             }
         });
 
-        // Lights toggle - live update
         const lightBtn = document.getElementById('toggleLights');
         lightBtn.addEventListener('click', () => {
             this.state.lightsOn = !this.state.lightsOn;
             lightBtn.classList.toggle('active', this.state.lightsOn);
-            lightBtn.textContent = this.state.lightsOn ? 'LIGHT ON' : 'LIGHT';
+            lightBtn.textContent = this.state.lightsOn ? 'Lights ON' : 'Lights OFF';
             this.houses.setInteriorLights(this.state.lightsOn);
-            if (this.city) this.city.setLights(this.state.lightsOn);
+            this.city.setLights(this.state.lightsOn);
+            this.updateTimeOfDay(this.state.timeOfDay);
         });
 
-        // Time slider - live update (no regen)
         const timeSlider = document.getElementById('timeSlider');
         const timeVal = document.getElementById('timeVal');
         timeSlider.addEventListener('input', () => {
@@ -369,14 +806,25 @@ class PCGWorld {
             this.updateTimeOfDay(this.state.timeOfDay);
         });
 
-        // Seed slider - auto regen
         const seedSlider = document.getElementById('seedSlider');
         const seedVal = document.getElementById('seedVal');
         seedSlider.addEventListener('input', () => {
             this.state.seed = parseInt(seedSlider.value);
             seedVal.textContent = seedSlider.value;
-            this.scheduleRegen();
         });
+        seedSlider.addEventListener('change', () => {
+            this.generateWorld();
+        });
+
+        const starSlider = document.getElementById('starSlider');
+        const starVal = document.getElementById('starVal');
+        if (starSlider) {
+            starSlider.addEventListener('input', () => {
+                this.state.starDensity = parseInt(starSlider.value);
+                starVal.textContent = starSlider.value;
+                this.updateTimeOfDay(this.state.timeOfDay);
+            });
+        }
     }
 
     onResize() {
@@ -388,25 +836,38 @@ class PCGWorld {
     animate() {
         requestAnimationFrame(() => this.animate());
 
-        try {
-            const deltaTime = this.clock.getDelta();
-            const time = this.clock.getElapsedTime();
+        const deltaTime = this.clock.getDelta();
+        const time = this.clock.getElapsedTime();
 
-            this.controls.update();
+        this.controls.update();
+        this.terrain.update(time);
+        this.fire.update(time);
+        this.weather.update(time);
+        this.city.update(time, deltaTime);
 
-            if (this.terrain) {
-                this.terrain.update(time);
-                const isSnowing = this.state.weather === 'snow';
-                this.terrain.updateSnowAccum(isSnowing, deltaTime);
-            }
-            if (this.fire) this.fire.update(time);
-            if (this.weather) this.weather.update(time);
-            if (this.city) this.city.update(time);
-
-            this.renderer.render(this.scene, this.camera);
-        } catch (e) {
-            console.error('Animate error:', e);
+        if (this.starField) {
+            this.starField.material.uniforms.uTime.value = time;
         }
+
+        const isSnowing = this.state.weather === 'snow';
+        if (this.terrain) {
+            this.terrain.updateSnowAccum(isSnowing, deltaTime);
+        }
+
+        if (this.vegetation) {
+            this.vegetation.updateSnowAccum(isSnowing, deltaTime);
+        }
+
+        if (this.houses) {
+            this.houses.updateSnowAccum(isSnowing, deltaTime);
+        }
+
+        // Update city building snow accumulation
+        if (this.city) {
+            this.city.updateSnowAccum(isSnowing, deltaTime);
+        }
+
+        this.renderer.render(this.scene, this.camera);
     }
 }
 

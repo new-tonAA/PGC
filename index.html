@@ -140,6 +140,40 @@
             margin-bottom: 12px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        #ui-panel {
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        }
+        #ui-panel.collapsed {
+            transform: translateX(-110%);
+            opacity: 0;
+            pointer-events: none;
+        }
+        #toggle-ui {
+            position: fixed;
+            top: 8px;
+            left: 196px;
+            z-index: 101;
+            width: 28px;
+            height: 28px;
+            border: 1px solid #444;
+            background: rgba(10,10,10,0.92);
+            color: #0f0;
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            font-family: 'Consolas', 'Courier New', monospace;
+        }
+        #toggle-ui.shifted {
+            left: 196px;
+        }
+        #toggle-ui:not(.shifted) {
+            left: 8px;
+        }
     </style>
 </head>
 <body>
@@ -168,12 +202,19 @@
 
         <div class="control-group">
             <label>HOUSES <span class="value" id="houseCountVal">8</span></label>
-            <input type="range" id="houseCount" min="1" max="40" value="8">
+            <input type="range" id="houseCount" min="1" max="30" value="8">
         </div>
-
         <div class="control-group">
             <label>VEHICLES <span class="value" id="vehicleCountVal">5</span></label>
-            <input type="range" id="vehicleCount" min="0" max="15" value="5">
+            <input type="range" id="vehicleCount" min="0" max="20" value="5">
+        </div>
+        <div class="control-group">
+            <label>ROAD DENSITY <span class="value" id="roadDensityVal">50</span></label>
+            <input type="range" id="roadDensity" min="20" max="80" value="50">
+        </div>
+        <div class="control-group">
+            <label>LIGHT SPACING <span class="value" id="lightSpacingVal">12</span></label>
+            <input type="range" id="lightSpacing" min="6" max="24" value="12">
         </div>
 
         <div class="separator"></div>
@@ -207,7 +248,15 @@
             <input type="range" id="seedSlider" min="1" max="999" value="42">
         </div>
 
+        <div class="control-group">
+            <label>STARS <span class="value" id="starVal">0</span></label>
+            <input type="range" id="starSlider" min="0" max="100" value="0" step="5">
+        </div>
+
+        <div class="separator"></div>
     </div>
+
+    <button id="toggle-ui" class="shifted">&#9664;</button>
 
     <div id="info">LMB: Rotate · RMB: Pan · Scroll: Zoom</div>
 
@@ -221,6 +270,24 @@
     </script>
     <script type="module" src="js/main.js"></script>
     <script>
+        (function() {
+            var toggleBtn = document.getElementById('toggle-ui');
+            var panel = document.getElementById('ui-panel');
+            var isCollapsed = false;
+            toggleBtn.addEventListener('click', function() {
+                isCollapsed = !isCollapsed;
+                if (isCollapsed) {
+                    panel.classList.add('collapsed');
+                    toggleBtn.classList.remove('shifted');
+                    toggleBtn.innerHTML = '&#9654;';
+                } else {
+                    panel.classList.remove('collapsed');
+                    toggleBtn.classList.add('shifted');
+                    toggleBtn.innerHTML = '&#9664;';
+                }
+            });
+        })();
+
         window.addEventListener('error', function(e) {
             console.error('JS Error:', e.message, e.filename, e.lineno);
             var loading = document.getElementById('loading');

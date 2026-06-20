@@ -329,7 +329,7 @@ class ProceduralHouse {
         }
 
         // Interior point light
-        const interiorLight = new THREE.PointLight(0xffcc66, 0, 8, 2);
+        const interiorLight = new THREE.PointLight(0xffcc66, 0, 20, 1.5);
         interiorLight.position.set(0, height * 0.6, 0);
         group.add(interiorLight);
         group.userData.interiorLight = interiorLight;
@@ -345,6 +345,10 @@ class ProceduralHouse {
         // Store bounding info for collision
         const boundingRadius = Math.max(width, depth) * 0.75;
         group.userData.boundingRadius = boundingRadius;
+        group.userData.houseWidth = width;
+        group.userData.houseDepth = depth;
+        group.userData.houseHeight = height;
+        group.userData.roofHeight = roofHeight;
 
         this.scene.add(group);
         this.houses.push(group);
@@ -357,14 +361,13 @@ class ProceduralHouse {
         this.clear();
 
         const settlement = SETTLEMENT_TYPES[this.settlementType];
-        const maxAttempts = count * 20; // More attempts to find valid spots
+        const maxAttempts = count * 30;
 
         let placed = 0;
         for (let attempt = 0; attempt < maxAttempts && placed < count; attempt++) {
-            const spot = terrain.findFlatSpot(0, 0, terrain.size * 0.4);
+            const spot = terrain.findFlatSpot(0, 0, terrain.size * 0.45);
             if (!spot) continue;
 
-            // Check minimum spacing based on settlement type
             const minSpacing = settlement.spacing;
             if (!this.isPositionValid(spot.x, spot.z, minSpacing, minSpacing)) continue;
 
@@ -373,17 +376,72 @@ class ProceduralHouse {
         }
     }
 
+    // PCG incremental: update house count without clearing existing houses
+    updateCount(terrain, newCount) {
+        const current = this.houses.length;
+        if (newCount > current) {
+            return this.addHouses(terrain, newCount - current);
+        } else if (newCount < current) {
+            return this.removeHouses(current - newCount);
+        }
+        return current;
+    }
+
+    // PCG incremental: add houses without removing existing ones
+    addHouses(terrain, count) {
+        const settlement = SETTLEMENT_TYPES[this.settlementType];
+        const maxAttempts = count * 40;
+        let placed = 0;
+        for (let attempt = 0; attempt < maxAttempts && placed < count; attempt++) {
+            const spot = terrain.findFlatSpot(0, 0, terrain.size * 0.45);
+            if (!spot) continue;
+            const minSpacing = settlement.spacing;
+            if (!this.isPositionValid(spot.x, spot.z, minSpacing, minSpacing)) continue;
+            this.generate(spot, terrain);
+            placed++;
+        }
+        return placed;
+    }
+
+    // PCG incremental: remove excess houses from the end, keeping earlier ones
+    removeHouses(count) {
+        let removed = 0;
+        for (let i = 0; i < count && this.houses.length > 0; i++) {
+            const house = this.houses[this.houses.length - 1];
+            this.scene.remove(house);
+            house.traverse((child) => {
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(m => m.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
+                }
+            });
+            if (house.userData.interiorLight) {
+                const idx = this.interiorLights.indexOf(house.userData.interiorLight);
+                if (idx >= 0) this.interiorLights.splice(idx, 1);
+            }
+            this.houses.pop();
+            this.placedPositions.pop();
+            removed++;
+        }
+        return removed;
+    }
+
     // Toggle interior lights on/off
     setInteriorLights(on) {
         this.lightsOn = on;
         for (const house of this.houses) {
             const ud = house.userData;
             if (ud.interiorLight) {
-                ud.interiorLight.intensity = on ? 1.5 : 0;
+                ud.interiorLight.intensity = on ? 3.0 : 0;
+                ud.interiorLight.distance = 20;
             }
             if (ud.windowMeshes) {
                 for (const w of ud.windowMeshes) {
-                    w.material.emissiveIntensity = on ? 0.8 : 0.0;
+                    w.material.emissiveIntensity = on ? 1.0 : 0.0;
                     w.material.color.set(on ? 0xffdd88 : 0x87ceeb);
                 }
             }
@@ -407,6 +465,104 @@ class ProceduralHouse {
         this.houses = [];
         this.placedPositions = [];
         this.interiorLights = [];
+    }
+
+    updateSnowAccum(isSnowing, deltaTime) {
+        if (isSnowing) {
+            this.snowAccum = Math.min(1.0, (this.snowAccum || 0) + deltaTime * 0.033);
+        } else {
+            this.snowAccum = Math.max(0.0, (this.snowAccum || 0) - deltaTime * 0.067);
+        }
+
+        for (const house of this.houses) {
+            const ud = house.userData;
+            const w = ud.houseWidth || 3;
+            const d = ud.houseDepth || 3;
+            const h = ud.houseHeight || 3;
+            const roofH = ud.roofHeight || 1.5;
+            const style = ud.style || 'cottage';
+
+            // Create snow mesh on roof if not exists
+            if (!house.userData.snowMesh) {
+                // Different snow shapes for different roof types
+                let snowGeo;
+                if (style === 'modern') {
+                    // Flat roof - full snow coverage
+                    snowGeo = new THREE.BoxGeometry(w + 0.4, 0.2, d + 0.4);
+                } else if (style === 'tower') {
+                    // Cone roof - snow ring
+                    snowGeo = new THREE.CylinderGeometry(w * 0.3, w * 0.5, 0.2, 8);
+                } else {
+                    // Standard roof - snow ridge
+                    snowGeo = new THREE.BoxGeometry(w * 0.8, 0.18, d * 0.8);
+                }
+                const snowMat = new THREE.MeshPhongMaterial({
+                    color: 0xf0f0f5,
+                    flatShading: true,
+                    transparent: true,
+                    opacity: 1.0
+                });
+                const snowMesh = new THREE.Mesh(snowGeo, snowMat);
+                // Position on top of roof
+                if (style === 'modern') {
+                    snowMesh.position.y = h + 0.2;
+                } else {
+                    snowMesh.position.y = h + roofH * 0.5;
+                }
+                snowMesh.visible = false;
+                house.add(snowMesh);
+                house.userData.snowMesh = snowMesh;
+
+                // Add snow on window sills
+                const windowMeshes = ud.windowMeshes || [];
+                windowMeshes.forEach((wm, idx) => {
+                    const sillGeo = new THREE.BoxGeometry(0.4, 0.04, 0.15);
+                    const sillMat = new THREE.MeshPhongMaterial({
+                        color: 0xeef0f5,
+                        flatShading: true,
+                        transparent: true,
+                        opacity: 1.0
+                    });
+                    const sill = new THREE.Mesh(sillGeo, sillMat);
+                    // Position just below each window
+                    sill.position.copy(wm.position);
+                    sill.position.y -= 0.22;
+                    // Same facing direction as window
+                    sill.rotation.copy(wm.rotation);
+                    sill.visible = false;
+                    sill.userData.isWindowSillSnow = true;
+                    house.add(sill);
+                    if (!house.userData.windowSillSnow) house.userData.windowSillSnow = [];
+                    house.userData.windowSillSnow.push(sill);
+                });
+            }
+
+            // Update main snow mesh
+            const sm = house.userData.snowMesh;
+            if (this.snowAccum > 0.1) {
+                sm.visible = true;
+                sm.scale.set(1, 0.5 + this.snowAccum * 1.0, 1);
+                sm.material.opacity = Math.min(0.95, this.snowAccum * 1.1);
+                // Slight emissive for visibility at night
+                if (sm.material.emissive === undefined || !sm.material.emissive) {
+                    sm.material.emissive = new THREE.Color(0x111122);
+                }
+                sm.material.emissiveIntensity = this.snowAccum * 0.05;
+            } else {
+                sm.visible = false;
+            }
+
+            // Update window sill snow
+            if (house.userData.windowSillSnow) {
+                for (const sill of house.userData.windowSillSnow) {
+                    sill.visible = this.snowAccum > 0.3;
+                    if (sill.visible) {
+                        sill.material.opacity = Math.min(0.9, (this.snowAccum - 0.3) * 2.0);
+                        sill.scale.set(1, 1, 0.5 + this.snowAccum * 0.8);
+                    }
+                }
+            }
+        }
     }
 }
 
