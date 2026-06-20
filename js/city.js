@@ -1530,156 +1530,51 @@ class CitySystem {
 
     generateVehicles(terrain, roadPositionsX, roadPositionsZ, halfSize, vehicleCount) {
         const maxVehicles = vehicleCount != null ? vehicleCount : 5;
-
-        if (this.intersections.length < 2) return;
+        if (this.roads.length === 0) return;
 
         for (let i = 0; i < maxVehicles; i++) {
-            const startInter = this.intersections[Math.floor(Math.random() * this.intersections.length)];
-            const isHorizontal = Math.random() > 0.5;
-            const direction = Math.random() > 0.5 ? 1 : -1;
+            const road = this.roads[Math.floor(Math.random() * this.roads.length)];
+            const isH = Math.abs(road.dir.z) < 0.1;
+            const dir = Math.random() > 0.5 ? 1 : -1;
             const speed = 2 + Math.random() * 3;
+            const lane = dir * 0.5;
 
-            const vx = startInter.x;
-            const vz = startInter.z;
-            const vh = terrain.getHeight(vx, vz);
-
-            if (vh < terrain.waterLevel + 0.3) continue;
+            // Pick random position along the road
+            const t = Math.random();
+            const rx = road.start.x + road.dir.x * road.length * t;
+            const rz = road.start.z + road.dir.z * road.length * t;
+            const rh = terrain.getHeight(rx, rz);
+            if (rh < terrain.waterLevel + 0.3) continue;
 
             const vType = VEHICLE_TYPES[Math.floor(Math.random() * VEHICLE_TYPES.length)];
-            const vehicle = this.createVehicle(isHorizontal, direction, vType);
+            const vehicle = this.createVehicle(isH, dir, vType);
 
-            const offset = isHorizontal ? direction * 0.5 : 0;
-            const offsetZ = !isHorizontal ? direction * 0.5 : 0;
-            vehicle.position.set(vx + offset, vh + 0.3, vz + offsetZ);
-
-            const route = this.buildLoopRoute(vx, vz, isHorizontal, direction, terrain);
+            const px = isH ? rx : rx + lane;
+            const pz = isH ? rz + lane : rz;
+            vehicle.position.set(px, rh + 0.3, pz);
 
             vehicle.userData = {
-                isHorizontal,
-                direction,
+                isHorizontal: isH,
+                direction: dir,
                 speed,
-                halfSize,
-                roadPos: isHorizontal ? vz : vx,
-                isBoat: false,
                 currentSpeed: speed,
+                halfSize,
+                lane,
+                isBoat: false,
                 vehicleType: vType,
-                route,
-                routeIdx: 0,
-                routeDir: 1,
+                // Road reference
+                road: road,
+                progress: t,           // 0..1 position along the road
                 turning: false,
-                turnProgress: 0,
-                turnStart: new THREE.Vector3(),
-                turnEnd: new THREE.Vector3(),
-                turnStartAngle: 0,
-                turnEndAngle: 0
+                turnTimer: 0,
+                turnTargetIsH: false,
+                turnTargetRoad: 0,
+                turnTargetDir: 0,
             };
 
             this.group.add(vehicle);
             this.vehicles.push(vehicle);
         }
-    }
-
-    buildLoopRoute(startX, startZ, startHorizontal, startDirection, terrain) {
-        const route = [];
-        let x = startX;
-        let z = startZ;
-        let h = startHorizontal;
-        let d = startDirection;
-        const visited = new Set();
-
-        for (let step = 0; step < 30; step++) {
-            const key = `${Math.round(x)},${Math.round(z)},${h ? 'h' : 'v'},${d}`;
-            if (visited.has(key) && step > 2) break;
-            visited.add(key);
-
-            const nearestInter = this.findNearestIntersection(x, z, terrain);
-            if (!nearestInter) break;
-
-            const dx = nearestInter.x - x;
-            const dz = nearestInter.z - z;
-            const distToInter = Math.sqrt(dx * dx + dz * dz);
-
-            if (distToInter > 1.0) {
-                route.push({
-                    x: nearestInter.x, z: nearestInter.z,
-                    isHorizontal: h, direction: d, isIntersection: true
-                });
-            }
-
-            x = nearestInter.x;
-            z = nearestInter.z;
-
-            if (Math.random() < 0.6) {
-                h = !h;
-            }
-            d = Math.random() > 0.5 ? 1 : -1;
-
-            const nextInter = this.findNextIntersection(x, z, h, d, terrain);
-            if (!nextInter) break;
-
-            route.push({
-                x: nextInter.x, z: nextInter.z,
-                isHorizontal: h, direction: d, isIntersection: true
-            });
-
-            x = nextInter.x;
-            z = nextInter.z;
-        }
-
-        if (route.length < 2) {
-            route.push({ x: startX + 5, z: startZ, isHorizontal: true, direction: 1 });
-            route.push({ x: startX + 5, z: startZ + 5, isHorizontal: false, direction: 1 });
-            route.push({ x: startX, z: startZ + 5, isHorizontal: true, direction: -1 });
-            route.push({ x: startX, z: startZ, isHorizontal: false, direction: -1, isIntersection: true });
-        }
-
-        return route;
-    }
-
-    findNearestIntersection(x, z, terrain) {
-        let bestDist = Infinity;
-        let best = null;
-        const waterThreshold = terrain.waterLevel + 0.3;
-
-        for (const inter of this.intersections) {
-            if (terrain.getHeight(inter.x, inter.z) < waterThreshold) continue;
-            const dist = Math.abs(inter.x - x) + Math.abs(inter.z - z);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = inter;
-            }
-        }
-
-        if (!best && this.intersections.length > 0) {
-            best = this.intersections[0];
-        }
-
-        return best;
-    }
-
-    findNextIntersection(x, z, isHorizontal, direction, terrain) {
-        let bestDist = Infinity;
-        let best = null;
-
-        for (const inter of this.intersections) {
-            if (isHorizontal) {
-                if (Math.abs(inter.z - z) > 2) continue;
-                const dx = (inter.x - x) * direction;
-                if (dx <= 0.5) continue;
-            } else {
-                if (Math.abs(inter.x - x) > 2) continue;
-                const dz = (inter.z - z) * direction;
-                if (dz <= 0.5) continue;
-            }
-
-            const dist = Math.abs(inter.x - x) + Math.abs(inter.z - z);
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = inter;
-            }
-        }
-
-        return best;
     }
 
     createVehicle(isHorizontal, direction, vehicleType) {
@@ -1944,7 +1839,7 @@ class CitySystem {
     update(time, delta) {
         const dt = Math.min(delta || 0.016, 0.05);
 
-        // Update vehicles — simple road-following
+        // Update vehicles — each vehicle drives along its assigned road segment
         for (let i = 0; i < this.vehicles.length; i++) {
             const v = this.vehicles[i];
             const ud = v.userData;
@@ -1954,90 +1849,94 @@ class CitySystem {
                 continue;
             }
 
-            // Turning animation
+            // Turning animation — rotate at intersection
             if (ud.turning) {
                 ud.turnTimer += dt;
-                if (ud.turnTimer >= 0.4) {
+                const targetR = ud.turnTargetIsH ? (ud.turnTargetDir > 0 ? 0 : Math.PI) : (ud.turnTargetDir > 0 ? Math.PI/2 : -Math.PI/2);
+                let diff = targetR - v.rotation.y;
+                while (diff > Math.PI) diff -= Math.PI*2;
+                while (diff < -Math.PI) diff += Math.PI*2;
+                v.rotation.y += diff * Math.min(1, dt * 8);
+                if (ud.turnTimer >= 0.35) {
                     ud.turning = false;
                     ud.isHorizontal = ud.turnTargetIsH;
-                    ud.roadPos = ud.turnTargetRoad;
                     ud.direction = ud.turnTargetDir;
                     ud.currentSpeed = ud.speed;
+                    v.rotation.y = targetR;
                 }
-                const targetAng = ud.turnTargetIsH ? (ud.turnTargetDir > 0 ? 0 : Math.PI) : (ud.turnTargetDir > 0 ? Math.PI/2 : -Math.PI/2);
-                let d = targetAng - v.rotation.y;
-                while (d > Math.PI) d -= Math.PI*2;
-                while (d < -Math.PI) d += Math.PI*2;
-                v.rotation.y += d * dt * 6;
                 continue;
             }
 
-            // Traffic light check
+            const road = ud.road;
+            if (!road) continue;
+            const isH = Math.abs(road.dir.z) < 0.1;
+
+            // === COLLISION AVOIDANCE & TRAFFIC LIGHT CHECK ===
+            let brakeDist = Infinity;
+            // Traffic light ahead
             for (const tl of this.trafficLights) {
                 const tlx = tl.group.position.x, tlz = tl.group.position.z;
                 const toL = Math.sqrt((tlx-v.position.x)**2 + (tlz-v.position.z)**2);
-                if (toL < 6) {
+                if (toL < 8) {
                     const ph = (time + tl.phase) % 10;
                     const greenH = ph < 4.2;
-                    if ((ud.isHorizontal && !greenH) || (!ud.isHorizontal && greenH)) {
-                        if (toL < 2) ud.currentSpeed = 0;
-                        else ud.currentSpeed = Math.min(ud.currentSpeed, ud.speed * (toL-2)/4);
+                    if ((isH && !greenH) || (!isH && greenH)) {
+                        if (toL < brakeDist) brakeDist = toL;
                     }
                 }
             }
-
-            // Adaptive speed — slow for vehicles ahead
-            let minAhead = Infinity;
+            // Vehicle ahead on same road
             for (let j = 0; j < this.vehicles.length; j++) {
                 if (i === j) continue;
                 const o = this.vehicles[j];
                 if (o.userData.isBoat || o.userData.turning) continue;
+                if (o.userData.road !== road) continue;
                 const odx = o.position.x-v.position.x, odz = o.position.z-v.position.z;
                 const od = Math.sqrt(odx*odx+odz*odz);
-                const ahead = ud.isHorizontal ? ud.direction*odx : ud.direction*odz;
-                if (ahead > 0 && od < minAhead) minAhead = od;
+                const ahead = isH ? ud.direction*odx : ud.direction*odz;
+                if (ahead > 0 && od < brakeDist) brakeDist = od;
             }
-            if (minAhead < 3) ud.currentSpeed = Math.max(0.15, ud.speed*minAhead/3);
-            else if (minAhead < 6) ud.currentSpeed = ud.speed*(0.4+(minAhead-3)/6*0.6);
-            else ud.currentSpeed += (ud.speed-ud.currentSpeed)*Math.min(1,dt*3);
+            // Adapt speed
+            if (brakeDist < 1.5) ud.currentSpeed = 0;
+            else if (brakeDist < 5) ud.currentSpeed = Math.max(0.1, ud.speed * (brakeDist-1.5) / 3.5);
+            else ud.currentSpeed += (ud.speed - ud.currentSpeed) * Math.min(1, dt * 4);
 
-            // Strict road-following movement
-            const mv = ud.currentSpeed * dt * 2;
-            if (ud.isHorizontal) {
-                v.position.x += ud.direction * mv;
-                if (v.position.x > ud.halfSize+3) { v.position.x = ud.halfSize+2; ud.direction = -1; }
-                if (v.position.x < -ud.halfSize-3) { v.position.x = -ud.halfSize-2; ud.direction = 1; }
-                v.position.z = ud.roadPos + (ud.lane || 0);
-                v.rotation.y = ud.direction > 0 ? 0 : Math.PI;
-            } else {
-                v.position.z += ud.direction * mv;
-                if (v.position.z > ud.halfSize+3) { v.position.z = ud.halfSize+2; ud.direction = -1; }
-                if (v.position.z < -ud.halfSize-3) { v.position.z = -ud.halfSize-2; ud.direction = 1; }
-                v.position.x = ud.roadPos + (ud.lane || 0);
-                v.rotation.y = ud.direction > 0 ? Math.PI/2 : -Math.PI/2;
-            }
+            // === MOVE ALONG ROAD ===
+            const move = ud.currentSpeed * dt * 2.5;
+            ud.progress += (ud.direction * move) / Math.max(road.length, 0.1);
+
+            // Reverse at road ends
+            if (ud.progress >= 1.0) { ud.progress = 1.0; ud.direction = -1; }
+            if (ud.progress <= 0.0) { ud.progress = 0.0; ud.direction = 1; }
+
+            // Position from road segment
+            const px = road.start.x + road.dir.x * road.length * ud.progress;
+            const pz = road.start.z + road.dir.z * road.length * ud.progress;
+            v.position.x = isH ? px : px + ud.lane;
+            v.position.z = isH ? pz + ud.lane : pz;
             v.position.y = (this.terrain ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3 : v.position.y);
+            v.rotation.y = isH ? (ud.direction > 0 ? 0 : Math.PI) : (ud.direction > 0 ? Math.PI/2 : -Math.PI/2);
 
-            // Turn at intersections (3% chance each frame near an intersection)
-            if (Math.random() < 0.004 && !ud.turning) {
-                const nh = !ud.isHorizontal;
+            // === TURN AT INTERSECTIONS (small chance each frame) ===
+            if (Math.random() < 0.003) {
+                const nh = !isH;
                 const nd = Math.random() > 0.5 ? 1 : -1;
-                const ni = this.findNextIntersection(v.position.x, v.position.z, nh, nd, this.terrain);
-                if (ni) {
-                    ud.turning = true; ud.turnTimer = 0;
-                    ud.turnTargetIsH = nh; ud.turnTargetRoad = nh ? ni.z : ni.x; ud.turnTargetDir = nd;
+                // Find any road at this position going in the perpendicular direction
+                for (const r of this.roads) {
+                    const rh = Math.abs(r.dir.z) < 0.1;
+                    if (rh === isH) continue; // same direction, skip
+                    // Check if this road passes near our position
+                    const rx = r.start.x + r.dir.x * r.length * 0.5;
+                    const rz = r.start.z + r.dir.z * r.length * 0.5;
+                    if (Math.abs(rx-v.position.x) < 1.5 && Math.abs(rz-v.position.z) < 1.5) {
+                        ud.turning = true; ud.turnTimer = 0;
+                        ud.turnTargetIsH = !isH; ud.turnTargetDir = nd;
+                        ud.road = r;
+                        ud.progress = (nd > 0) ? 0.05 : 0.95;
+                        ud.lane = nd * 0.5;
+                        break;
+                    }
                 }
-            }
-        }
-
-        // Collision avoidance
-        for (let i = 0; i < this.vehicles.length; i++) {
-            for (let j = i+1; j < this.vehicles.length; j++) {
-                const a = this.vehicles[i], b = this.vehicles[j];
-                if (a.userData.isBoat || b.userData.isBoat) continue;
-                const dx = a.position.x-b.position.x, dz = a.position.z-b.position.z;
-                const d = Math.sqrt(dx*dx+dz*dz);
-                if (d < 2.0 && d > 0.01) { const p = (2.0-d)*0.3; a.position.x+=dx/d*p; a.position.z+=dz/d*p; b.position.x-=dx/d*p; b.position.z-=dz/d*p; }
             }
         }
 
