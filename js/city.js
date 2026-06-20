@@ -51,8 +51,8 @@ class CitySystem {
             metalness: 0.05,
         });
 
-        this.roadDashMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-        this.roadLineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        this.roadDashMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.7, metalness: 0.0 });
+        this.roadLineMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.7, metalness: 0.0 });
 
         const isIsland = terrain.terrainType === 'islands';
 
