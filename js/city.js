@@ -1535,19 +1535,18 @@ class CitySystem {
         for (let i = 0; i < maxVehicles; i++) {
             const road = this.roads[Math.floor(Math.random() * this.roads.length)];
             const isH = Math.abs(road.dir.z) < 0.1;
-            const dir = Math.random() > 0.5 ? 1 : -1;
             const speed = 2 + Math.random() * 3;
-            const lane = dir * 0.5;
+            const lane = 0.5; // single lane, offset to the right always
 
             // Pick random position along the road
-            const t = Math.random();
+            const t = 0.1 + Math.random() * 0.8; // avoid extreme edges
             const rx = road.start.x + road.dir.x * road.length * t;
             const rz = road.start.z + road.dir.z * road.length * t;
             const rh = terrain.getHeight(rx, rz);
             if (rh < terrain.waterLevel + 0.3) continue;
 
             const vType = VEHICLE_TYPES[Math.floor(Math.random() * VEHICLE_TYPES.length)];
-            const vehicle = this.createVehicle(isH, dir, vType);
+            const vehicle = this.createVehicle(isH, 1, vType); // Always direction=1 (start→end)
 
             const px = isH ? rx : rx + lane;
             const pz = isH ? rz + lane : rz;
@@ -1555,16 +1554,15 @@ class CitySystem {
 
             vehicle.userData = {
                 isHorizontal: isH,
-                direction: dir,
+                direction: 1,       // always start→end (one-way road)
                 speed,
                 currentSpeed: speed,
                 halfSize,
                 lane,
                 isBoat: false,
                 vehicleType: vType,
-                // Road reference
                 road: road,
-                progress: t,           // 0..1 position along the road
+                progress: t,
                 turning: false,
                 turnTimer: 0,
                 turnTargetIsH: false,
@@ -1893,7 +1891,7 @@ class CitySystem {
                 if (o.userData.road !== road) continue;
                 const odx = o.position.x-v.position.x, odz = o.position.z-v.position.z;
                 const od = Math.sqrt(odx*odx+odz*odz);
-                const ahead = isH ? ud.direction*odx : ud.direction*odz;
+                const ahead = isH ? odx : odz;  // one-way: positive = ahead in start→end direction
                 if (ahead > 0 && od < brakeDist) brakeDist = od;
             }
             // Adapt speed
@@ -1901,43 +1899,37 @@ class CitySystem {
             else if (brakeDist < 5) ud.currentSpeed = Math.max(0.1, ud.speed * (brakeDist-1.5) / 3.5);
             else ud.currentSpeed += (ud.speed - ud.currentSpeed) * Math.min(1, dt * 4);
 
-            // === MOVE ALONG ROAD ===
+            // === MOVE ALONG ROAD (always start→end, one-way) ===
             const move = ud.currentSpeed * dt * 2.5;
-            ud.progress += (ud.direction * move) / Math.max(road.length, 0.1);
+            ud.progress += move / Math.max(road.length, 0.1);
 
-            // === ROAD END — find a crossing road, don't reverse blindly ===
-            const atEnd = ud.progress >= 1.0 || ud.progress <= 0.0;
-            if (atEnd) {
-                ud.progress = Math.max(0, Math.min(1, ud.progress));
+            // === ROAD END — find a connecting crossing road ===
+            if (ud.progress >= 1.0) {
+                ud.progress = 1.0;
                 let turned = false;
-                // Try to find a perpendicular road at this endpoint
-                const ep = isH ? (ud.progress < 0.5 ? road.start : road.end) : (ud.progress < 0.5 ? road.start : road.end);
-                const ex = ep.x, ez = ep.z;
+                const ep = road.end;
                 for (const r of this.roads) {
                     if (r === road) continue;
                     const rh = Math.abs(r.dir.z) < 0.1;
-                    if (rh === isH) continue; // same axis, might be parallel — skip unless overlapping
-                    // Check if this road passes near our endpoint
+                    if (rh === isH) continue;
                     const rx = r.start.x + r.dir.x * r.length * 0.5;
                     const rz = r.start.z + r.dir.z * r.length * 0.5;
-                    if (Math.abs(rx - ex) < 2.5 && Math.abs(rz - ez) < 2.5) {
-                        const nd = Math.random() > 0.5 ? 1 : -1;
+                    if (Math.abs(rx - ep.x) < 3.0 && Math.abs(rz - ep.z) < 3.0) {
                         ud.turning = true; ud.turnTimer = 0;
-                        ud.turnTargetIsH = rh; ud.turnTargetDir = nd;
+                        ud.turnTargetIsH = rh; ud.turnTargetDir = 1;
                         ud.road = r;
-                        ud.progress = (nd > 0) ? 0.05 : 0.95;
-                        ud.lane = nd * 0.5;
+                        ud.progress = 0.05;
+                        ud.lane = 0.5;
                         turned = true;
                         break;
                     }
                 }
                 if (!turned) {
-                    // No crossing road — reverse on same road
-                    ud.direction = -ud.direction;
+                    // Dead end — reset to start of this road
+                    ud.progress = 0.05;
                 }
             }
 
-            // Position from road segment (re-read road in case we turned)
             const curRoad = ud.road || road;
             const curIsH = Math.abs(curRoad.dir.z) < 0.1;
             const cpx = curRoad.start.x + curRoad.dir.x * curRoad.length * ud.progress;
@@ -1945,28 +1937,7 @@ class CitySystem {
             v.position.x = curIsH ? cpx : cpx + ud.lane;
             v.position.z = curIsH ? cpz + ud.lane : cpz;
             v.position.y = (this.terrain ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3 : v.position.y);
-            v.rotation.y = curIsH ? (ud.direction > 0 ? 0 : Math.PI) : (ud.direction > 0 ? Math.PI/2 : -Math.PI/2);
-
-            // === VOLUNTARY TURN AT INTERSECTIONS (small chance each frame) ===
-            if (Math.random() < 0.003 && !ud.turning && ud.progress > 0.3 && ud.progress < 0.7) {
-                const nh = !isH;
-                for (const r of this.roads) {
-                    if (r === road) continue;
-                    const rh = Math.abs(r.dir.z) < 0.1;
-                    if (rh !== nh) continue;
-                    const rx = r.start.x + r.dir.x * r.length * 0.5;
-                    const rz = r.start.z + r.dir.z * r.length * 0.5;
-                    if (Math.abs(rx - v.position.x) < 2.0 && Math.abs(rz - v.position.z) < 2.0) {
-                        const nd = Math.random() > 0.5 ? 1 : -1;
-                        ud.turning = true; ud.turnTimer = 0;
-                        ud.turnTargetIsH = nh; ud.turnTargetDir = nd;
-                        ud.road = r;
-                        ud.progress = (nd > 0) ? 0.05 : 0.95;
-                        ud.lane = nd * 0.5;
-                        break;
-                    }
-                }
-            }
+            v.rotation.y = curIsH ? 0 : Math.PI/2;
         }
 
 
