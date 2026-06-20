@@ -85,9 +85,11 @@ class CitySystem {
             }
         }
 
-        console.log('[city] intersections:', allIntersections.length, 'blocks:', (rawPositions.length-1)*(rawPositions.length-1));
+        // Debug: show status on screen
+        document.getElementById('info').textContent = `City grid: ${allIntersections.length} intersections, ${rawPositions.length}×${rawPositions.length} grid`;
+
         if (allIntersections.length < 4) {
-            console.warn('[city] too few intersections, aborting grid');
+            document.getElementById('info').textContent += ' — TOO FEW, ABORTED';
             this.intersections = [];
             return;
         }
@@ -303,6 +305,9 @@ class CitySystem {
         this.resolveRoadOneWayDirections(roadPositionsX, roadPositionsZ);
 
         this.generateVehicles(terrain, roadPositionsX, roadPositionsZ, halfSize, vehicleCount);
+
+        document.getElementById('info').textContent =
+            `City: ${this.roads.length} roads, ${this.intersections.length} ints, ${this.cityBuildings.length} blds, ${this.vehicles.length} vehs`;
     }
 
     // ==========================================

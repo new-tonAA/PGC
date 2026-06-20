@@ -426,6 +426,7 @@ class PCGWorld {
             type: this.state.terrainType,
             renderer: this.renderer
         });
+        document.getElementById('info').textContent = 'Terrain: ' + this.state.terrainType + ', water:' + this.terrain.hasWater + ', wl:' + this.terrain.waterLevel;
 
         this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
 
