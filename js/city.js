@@ -1905,32 +1905,61 @@ class CitySystem {
             const move = ud.currentSpeed * dt * 2.5;
             ud.progress += (ud.direction * move) / Math.max(road.length, 0.1);
 
-            // Reverse at road ends
-            if (ud.progress >= 1.0) { ud.progress = 1.0; ud.direction = -1; }
-            if (ud.progress <= 0.0) { ud.progress = 0.0; ud.direction = 1; }
-
-            // Position from road segment
-            const px = road.start.x + road.dir.x * road.length * ud.progress;
-            const pz = road.start.z + road.dir.z * road.length * ud.progress;
-            v.position.x = isH ? px : px + ud.lane;
-            v.position.z = isH ? pz + ud.lane : pz;
-            v.position.y = (this.terrain ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3 : v.position.y);
-            v.rotation.y = isH ? (ud.direction > 0 ? 0 : Math.PI) : (ud.direction > 0 ? Math.PI/2 : -Math.PI/2);
-
-            // === TURN AT INTERSECTIONS (small chance each frame) ===
-            if (Math.random() < 0.003) {
-                const nh = !isH;
-                const nd = Math.random() > 0.5 ? 1 : -1;
-                // Find any road at this position going in the perpendicular direction
+            // === ROAD END — find a crossing road, don't reverse blindly ===
+            const atEnd = ud.progress >= 1.0 || ud.progress <= 0.0;
+            if (atEnd) {
+                ud.progress = Math.max(0, Math.min(1, ud.progress));
+                let turned = false;
+                // Try to find a perpendicular road at this endpoint
+                const ep = isH ? (ud.progress < 0.5 ? road.start : road.end) : (ud.progress < 0.5 ? road.start : road.end);
+                const ex = ep.x, ez = ep.z;
                 for (const r of this.roads) {
+                    if (r === road) continue;
                     const rh = Math.abs(r.dir.z) < 0.1;
-                    if (rh === isH) continue; // same direction, skip
-                    // Check if this road passes near our position
+                    if (rh === isH) continue; // same axis, might be parallel — skip unless overlapping
+                    // Check if this road passes near our endpoint
                     const rx = r.start.x + r.dir.x * r.length * 0.5;
                     const rz = r.start.z + r.dir.z * r.length * 0.5;
-                    if (Math.abs(rx-v.position.x) < 1.5 && Math.abs(rz-v.position.z) < 1.5) {
+                    if (Math.abs(rx - ex) < 2.5 && Math.abs(rz - ez) < 2.5) {
+                        const nd = Math.random() > 0.5 ? 1 : -1;
                         ud.turning = true; ud.turnTimer = 0;
-                        ud.turnTargetIsH = !isH; ud.turnTargetDir = nd;
+                        ud.turnTargetIsH = rh; ud.turnTargetDir = nd;
+                        ud.road = r;
+                        ud.progress = (nd > 0) ? 0.05 : 0.95;
+                        ud.lane = nd * 0.5;
+                        turned = true;
+                        break;
+                    }
+                }
+                if (!turned) {
+                    // No crossing road — reverse on same road
+                    ud.direction = -ud.direction;
+                }
+            }
+
+            // Position from road segment (re-read road in case we turned)
+            const curRoad = ud.road || road;
+            const curIsH = Math.abs(curRoad.dir.z) < 0.1;
+            const cpx = curRoad.start.x + curRoad.dir.x * curRoad.length * ud.progress;
+            const cpz = curRoad.start.z + curRoad.dir.z * curRoad.length * ud.progress;
+            v.position.x = curIsH ? cpx : cpx + ud.lane;
+            v.position.z = curIsH ? cpz + ud.lane : cpz;
+            v.position.y = (this.terrain ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3 : v.position.y);
+            v.rotation.y = curIsH ? (ud.direction > 0 ? 0 : Math.PI) : (ud.direction > 0 ? Math.PI/2 : -Math.PI/2);
+
+            // === VOLUNTARY TURN AT INTERSECTIONS (small chance each frame) ===
+            if (Math.random() < 0.003 && !ud.turning && ud.progress > 0.3 && ud.progress < 0.7) {
+                const nh = !isH;
+                for (const r of this.roads) {
+                    if (r === road) continue;
+                    const rh = Math.abs(r.dir.z) < 0.1;
+                    if (rh !== nh) continue;
+                    const rx = r.start.x + r.dir.x * r.length * 0.5;
+                    const rz = r.start.z + r.dir.z * r.length * 0.5;
+                    if (Math.abs(rx - v.position.x) < 2.0 && Math.abs(rz - v.position.z) < 2.0) {
+                        const nd = Math.random() > 0.5 ? 1 : -1;
+                        ud.turning = true; ud.turnTimer = 0;
+                        ud.turnTargetIsH = nh; ud.turnTargetDir = nd;
                         ud.road = r;
                         ud.progress = (nd > 0) ? 0.05 : 0.95;
                         ud.lane = nd * 0.5;
