@@ -1227,7 +1227,7 @@ class CitySystem {
         }
         this.vehicles = [];
         if (terrain.terrainType === 'islands') {
-            this.createBoats(terrain);
+            this.createBoats(terrain, 3);
         } else {
             const primarySpacing = (terrain.terrainType === 'suburban') ? 10 : 8;
             const halfSize = terrain.size * 0.4;
