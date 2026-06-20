@@ -766,7 +766,11 @@ class PCGWorld {
                 lightSpacingVal.textContent = lightSpacingSlider.value;
             });
             lightSpacingSlider.addEventListener('change', () => {
-                this.regenerateSettlement();
+                if (this.city && this.needsCitySystem()) {
+                    this.city.lightSpacing = this.state.lightSpacing;
+                    this.city.regenerateStreetLights(this.terrain);
+                    this.updateTimeOfDay(this.state.timeOfDay);
+                }
             });
         }
 

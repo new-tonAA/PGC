@@ -2089,12 +2089,17 @@ class CitySystem {
                         ud.currentSpeed += (ud.speed - ud.currentSpeed) * Math.min(1, dt * 2);
                     }
 
-                    // Move along route
+                    // Move along route — locked to road axis
                     const moveAmount = ud.currentSpeed * dt;
-                    const nx = v.position.x + (dx / dist) * Math.min(moveAmount, dist);
-                    const nz = v.position.z + (dz / dist) * Math.min(moveAmount, dist);
-                    const ny = this.terrain ? this.terrain.getHeight(nx, nz) + 0.3 : v.position.y;
-                    v.position.set(nx, ny, nz);
+                    if (target.isHorizontal) {
+                        v.position.x += (dx > 0 ? 1 : -1) * Math.min(moveAmount, Math.abs(dx));
+                        v.position.z = target.z; // Lock Z to road
+                    } else {
+                        v.position.z += (dz > 0 ? 1 : -1) * Math.min(moveAmount, Math.abs(dz));
+                        v.position.x = target.x; // Lock X to road
+                    }
+                    const ny = this.terrain ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3 : v.position.y;
+                    v.position.y = ny;
 
                     // Snap to road-aligned angle (0, ±π/2, π) — no diagonal drifting
                     const targetAngle = target.isHorizontal
@@ -2245,6 +2250,56 @@ class CitySystem {
                     sm.material.opacity = Math.min(0.95, this.snowAccum * 1.1);
                     sm.material.emissiveIntensity = this.snowAccum * 0.05;
                 }
+            }
+        }
+    }
+
+    // ==========================================
+    // REGENERATE STREET LIGHTS (no full rebuild)
+    // ==========================================
+    regenerateStreetLights(terrain) {
+        // Remove existing street lights
+        for (const sl of this.streetLightLamps) {
+            this.group.remove(sl.group);
+            sl.group.traverse(child => {
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                    else child.material.dispose();
+                }
+            });
+        }
+        this.streetLightLamps = [];
+
+        // Re-place along existing roads
+        const spacing = this.lightSpacing;
+        const placed = new Set();
+
+        for (const road of this.roads) {
+            const roadLen = road.length;
+            const isHoriz = Math.abs(road.dir.z) < 0.1;
+            const numLights = Math.max(1, Math.floor(roadLen / spacing));
+
+            for (let l = 0; l < numLights; l++) {
+                const t = (l + 0.5) / numLights;
+                const lx = road.start.x + road.dir.x * roadLen * t;
+                const lz = road.start.z + road.dir.z * roadLen * t;
+                const lk = Math.round(lx) + ',' + Math.round(lz);
+                if (placed.has(lk)) continue;
+                const lh = terrain.getHeight(lx, lz);
+                if (lh < terrain.waterLevel + 0.3) continue;
+                for (const side of [-1, 1]) {
+                    const offset = side * (road.width / 2 + 0.6);
+                    const slx = isHoriz ? lx : lx + offset;
+                    const slz = isHoriz ? lz + offset : lz;
+                    const slh = terrain.getHeight(slx, slz);
+                    if (slh < terrain.waterLevel + 0.3) continue;
+                    const armAngle = isHoriz
+                        ? (side === -1 ? Math.PI / 2 : -Math.PI / 2)
+                        : (side === -1 ? 0 : Math.PI);
+                    this.createStreetLight(slx, slh, slz, terrain, armAngle);
+                }
+                placed.add(lk);
             }
         }
     }
