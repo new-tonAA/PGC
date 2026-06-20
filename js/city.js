@@ -51,8 +51,8 @@ class CitySystem {
             metalness: 0.05,
         });
 
-        this.roadDashMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-        this.roadLineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        this.roadDashMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.7, metalness: 0 });
+        this.roadLineMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.7, metalness: 0 });
 
         const isIsland = terrain.terrainType === 'islands';
 
@@ -1902,8 +1902,14 @@ class CitySystem {
 
                 if (rawT >= 1) {
                     ud.turning = false;
+                    // Recalculate progress from actual turn-end position (not pre-estimated)
+                    const cr = ud.road;
+                    const cIsH = cr && Math.abs(cr.dir.z) < 0.1;
+                    if (cr && cIsH) ud.progress = (px - cr.start.x) / Math.max(cr.length, 0.1);
+                    else if (cr)     ud.progress = (pz - cr.start.z) / Math.max(cr.length, 0.1);
+                    if (ud.progress < 0.01) ud.progress = 0.01;
+                    if (ud.progress > 0.99) ud.progress = 0.99;
                     ud.currentSpeed = Math.max(ud.currentSpeed, ud.speed * 0.3);
-                    // progress 已在切换路口时设好，车在新路上继续行驶
                 }
                 continue;
             }

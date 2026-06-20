@@ -332,130 +332,70 @@ class PCGWorld {
     }
 
     updateAllLights(time) {
-        const nightFactor = (time < 6 || time > 18) ? 1.0 :
-            (time < 8 ? (8 - time) / 2 : (time > 16 ? (time - 16) / 2 : 0));
+        const nightBoost = (time > 18 || time < 6) ? 1.0 :
+                           (time > 16 ? (time - 16) / 2 : (time < 8 ? (8 - time) / 2 : 0));
 
         if (this.state.lightsOn) {
-            // House interior lights
+            const b = Math.max(0.3, nightBoost);
             if (this.houses) {
-                for (const house of this.houses.houses) {
-                    if (house.userData.interiorLight) {
-                        house.userData.interiorLight.intensity = nightFactor * 15.0;
-                    }
+                for (const h of this.houses.houses) {
+                    if (h.userData.interiorLight) h.userData.interiorLight.intensity = b * 15;
+                    if (h.userData.windowMeshes)
+                        for (const w of h.userData.windowMeshes) w.material.emissiveIntensity = b;
                 }
             }
-            // City building lights - stronger for visible ground illumination
             if (this.city) {
                 for (const bld of this.city.cityBuildings) {
-                    if (bld.userData.interiorLight) {
-                        bld.userData.interiorLight.intensity = nightFactor * 15.0;
-                    }
-                    if (bld.userData.windowMeshes) {
-                        for (const w of bld.userData.windowMeshes) {
-                            w.material.emissiveIntensity = nightFactor * 1.5;
-                        }
-                    }
-                    if (bld.userData.signLight) {
-                        bld.userData.signLight.intensity = nightFactor * 8.0;
-                    }
-                    if (bld.userData.beamLight) {
-                        bld.userData.beamLight.intensity = nightFactor * 12.0;
-                    }
-                    if (bld.userData.topLight) {
-                        bld.userData.topLight.intensity = nightFactor * 4.0;
-                    }
-                    if (bld.userData.lanternGlow) {
-                        bld.userData.lanternGlow.intensity = nightFactor * 4.0;
-                    }
+                    if (bld.userData.interiorLight) bld.userData.interiorLight.intensity = b * 15;
+                    if (bld.userData.topLight) bld.userData.topLight.intensity = b * 5;
+                    if (bld.userData.beamLight) bld.userData.beamLight.intensity = b * 12;
+                    if (bld.userData.lanternGlow) bld.userData.lanternGlow.intensity = b * 3;
+                    if (bld.userData.windowMeshes)
+                        for (const w of bld.userData.windowMeshes) w.material.emissiveIntensity = b;
                 }
-                // Street lights - bright ground illumination
                 for (const sl of this.city.streetLightLamps) {
-                    if (sl.spotLight) {
-                        sl.spotLight.intensity = nightFactor * 18.0;
-                    }
-                    if (sl.pointLight) {
-                        sl.pointLight.intensity = nightFactor * 10.0;
-                    }
+                    if (sl.spotLight) sl.spotLight.intensity = b * 20;
+                    if (sl.pointLight) sl.pointLight.intensity = b * 12;
                     if (sl.lampMat) {
-                        const isOn = nightFactor > 0.15;
-                        sl.lampMat.opacity = isOn ? 0.95 : 0.25;
-                        sl.lampMat.color.set(isOn ? 0xffffdd : 0x666666);
-                        if (sl.lampMat.emissive !== undefined) {
-                            sl.lampMat.emissive.set(isOn ? 0xffffcc : 0x000000);
-                            sl.lampMat.emissiveIntensity = isOn ? nightFactor * 2.5 : 0;
-                        }
+                        sl.lampMat.opacity = 0.95;
+                        sl.lampMat.color.set(0xffffdd);
+                        if (sl.lampMat.emissive) sl.lampMat.emissiveIntensity = b * 3;
                     }
-                    if (sl.glowMat) {
-                        sl.glowMat.opacity = nightFactor * 0.75;
-                    }
-                    if (sl.coneMat) {
-                        sl.coneMat.opacity = nightFactor * 0.2;
-                    }
+                    if (sl.glowMat) sl.glowMat.opacity = b * 0.8;
+                    if (sl.coneMat) sl.coneMat.opacity = b * 0.2;
                 }
-                // Vehicle headlights - maximum realism
                 for (const v of this.city.vehicles) {
-                    if (v.userData.headlight) {
-                        v.userData.headlight.intensity = nightFactor * 15.0;
-                    }
-                    if (v.userData.headlightPoint) {
-                        v.userData.headlightPoint.intensity = nightFactor * 6.0;
-                    }
-                    if (v.userData.tailLightMat) {
-                        v.userData.tailLightMat.emissiveIntensity = nightFactor * 1.2;
-                    }
+                    if (v.userData.headlight) v.userData.headlight.intensity = b * 15;
+                    if (v.userData.headlightPoint) v.userData.headlightPoint.intensity = b * 6;
+                    if (v.userData.tailLightMat) v.userData.tailLightMat.emissiveIntensity = b;
                 }
             }
         } else {
-            // Lights off - zero everything
             if (this.houses) {
-                for (const house of this.houses.houses) {
-                    if (house.userData.interiorLight) {
-                        house.userData.interiorLight.intensity = 0;
-                    }
+                for (const h of this.houses.houses) {
+                    if (h.userData.interiorLight) h.userData.interiorLight.intensity = 0;
+                    if (h.userData.windowMeshes)
+                        for (const w of h.userData.windowMeshes) w.material.emissiveIntensity = 0;
                 }
             }
             if (this.city) {
                 for (const bld of this.city.cityBuildings) {
-                    if (bld.userData.interiorLight) {
-                        bld.userData.interiorLight.intensity = 0;
-                    }
-                    if (bld.userData.windowMeshes) {
-                        for (const w of bld.userData.windowMeshes) {
-                            w.material.emissiveIntensity = 0;
-                        }
-                    }
-                    if (bld.userData.signLight) bld.userData.signLight.intensity = 0;
-                    if (bld.userData.beamLight) bld.userData.beamLight.intensity = 0;
+                    if (bld.userData.interiorLight) bld.userData.interiorLight.intensity = 0;
                     if (bld.userData.topLight) bld.userData.topLight.intensity = 0;
-                    if (bld.userData.lanternGlow) bld.userData.lanternGlow.intensity = 0;
+                    if (bld.userData.windowMeshes)
+                        for (const w of bld.userData.windowMeshes) w.material.emissiveIntensity = 0;
                 }
                 for (const sl of this.city.streetLightLamps) {
                     if (sl.spotLight) sl.spotLight.intensity = 0;
                     if (sl.pointLight) sl.pointLight.intensity = 0;
-                    if (sl.lampMat) {
-                        sl.lampMat.opacity = 0.25;
-                        sl.lampMat.color.set(0x666666);
-                        if (sl.lampMat.emissive !== undefined) {
-                            sl.lampMat.emissiveIntensity = 0;
-                        }
-                    }
+                    if (sl.lampMat) { sl.lampMat.opacity = 0.25; sl.lampMat.color.set(0x666666); sl.lampMat.emissiveIntensity = 0; }
                     if (sl.glowMat) sl.glowMat.opacity = 0;
                     if (sl.coneMat) sl.coneMat.opacity = 0;
-                }
-                for (const v of this.city.vehicles) {
-                    if (v.userData.headlight) {
-                        v.userData.headlight.intensity = 0;
-                    }
-                    if (v.userData.headlightPoint) {
-                        v.userData.headlightPoint.intensity = 0;
-                    }
-                    if (v.userData.tailLightMat) {
-                        v.userData.tailLightMat.emissiveIntensity = 0;
-                    }
                 }
             }
         }
     }
+
 
     needsCitySystem() {
         return this.state.settlementType === 'city' ||
