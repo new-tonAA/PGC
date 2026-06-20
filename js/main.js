@@ -481,9 +481,7 @@ class PCGWorld {
             renderer: this.renderer
         });
 
-        if (!this.city) {
-            this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
-        }
+        this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
 
         if (this.needsCitySystem()) {
             this.city.generate(this.terrain, this.state.seed, this.state.vehicleCount, {
@@ -496,11 +494,7 @@ class PCGWorld {
             }
         }
 
-        if (!this.houses) {
-            this.houses = new ProceduralHouse(this.scene, new SimplexNoise(this.state.seed));
-        } else {
-            this.houses.noise = new SimplexNoise(this.state.seed);
-        }
+        this.houses = new ProceduralHouse(this.scene, new SimplexNoise(this.state.seed));
 
         if (!this.needsCitySystem() || this.state.terrainType === 'islands') {
             this.houses.settlementType = this.state.settlementType;
@@ -514,20 +508,10 @@ class PCGWorld {
             }
         }
 
-        if (!this.fire) {
-            this.fire = new FireSystem(this.scene);
-        }
-
-        if (!this.weather) {
-            this.weather = new WeatherSystem(this.scene, this.camera);
-        }
+        this.fire = new FireSystem(this.scene);
+        this.weather = new WeatherSystem(this.scene, this.camera);
         this.weather.setWeather(this.state.weather);
-
-        if (!this.vegetation) {
-            this.vegetation = new VegetationSystem(this.scene, new SimplexNoise(this.state.seed));
-        } else {
-            this.vegetation.noise = new SimplexNoise(this.state.seed);
-        }
+        this.vegetation = new VegetationSystem(this.scene, new SimplexNoise(this.state.seed));
 
         const housePositions = this.houses.houses.map(h => ({
             x: h.position.x,
@@ -536,9 +520,19 @@ class PCGWorld {
         }));
 
         const roadPositions = [];
+        const roadSegments = [];
         if (this.needsCitySystem() && this.city.intersections) {
             for (const inter of this.city.intersections) {
                 roadPositions.push({ x: inter.x, z: inter.z });
+            }
+            if (this.city.roads) {
+                for (const road of this.city.roads) {
+                    roadSegments.push({
+                        start: { x: road.start.x, z: road.start.z },
+                        end: { x: road.end.x, z: road.end.z },
+                        width: road.width || this.city.roadWidth || 2.2
+                    });
+                }
             }
         }
 
@@ -546,7 +540,8 @@ class PCGWorld {
             seed: this.state.seed,
             settlementType: this.state.settlementType,
             housePositions,
-            roadPositions
+            roadPositions,
+            roadSegments
         });
 
         this.updateTimeOfDay(this.state.timeOfDay);
@@ -631,15 +626,27 @@ class PCGWorld {
             radius: h.userData.boundingRadius || 3
         }));
         const roadPositions = [];
+        const roadSegments = [];
         if (this.needsCitySystem() && this.city.intersections) {
             for (const inter of this.city.intersections) {
                 roadPositions.push({ x: inter.x, z: inter.z });
+            }
+            if (this.city.roads) {
+                for (const road of this.city.roads) {
+                    roadSegments.push({
+                        start: { x: road.start.x, z: road.start.z },
+                        end: { x: road.end.x, z: road.end.z },
+                        width: road.width || this.city.roadWidth || 2.2
+                    });
+                }
             }
         }
         this.vegetation.generate(this.terrain, {
             seed: this.state.seed,
             settlementType: this.state.settlementType,
-            housePositions, roadPositions
+            housePositions,
+            roadPositions,
+            roadSegments
         });
 
         // Apply current light state to all lights
@@ -755,7 +762,7 @@ class PCGWorld {
                 roadDensityVal.textContent = roadDensitySlider.value;
             });
             roadDensitySlider.addEventListener('change', () => {
-                this.regenerateSettlement();
+                this.scheduleRegen();
             });
         }
 
@@ -845,10 +852,10 @@ class PCGWorld {
         const time = this.clock.getElapsedTime();
 
         this.controls.update();
-        this.terrain.update(time);
-        this.fire.update(time);
-        this.weather.update(time);
-        this.city.update(time, deltaTime);
+        if (this.terrain)  this.terrain.update(time);
+        if (this.fire)     this.fire.update(time);
+        if (this.weather)  this.weather.update(time);
+        if (this.city)     this.city.update(time, deltaTime);
 
         if (this.starField) {
             this.starField.material.uniforms.uTime.value = time;
