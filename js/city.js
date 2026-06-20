@@ -64,30 +64,30 @@ class CitySystem {
     }
 
     generateGridCity(terrain, vehicleCount) {
-        const halfSize = terrain.size * 0.45;  // cover more terrain
-        const densityFactor = this.roadDensity / 50;
-        const blockSize = Math.max(3, Math.round(5 / Math.max(densityFactor, 0.5)));
+        const halfSize = terrain.size * 0.45;
+        const densityFactor = Math.max(0.4, this.roadDensity / 50);
+        const blockSize = Math.max(3, Math.round(5 / densityFactor));
         const roadWidth = 2.2;
 
         this.halfSize = halfSize;
         this.roadWidth = roadWidth;
 
         const rawPositions = [];
-        for (let pos = -halfSize; pos <= halfSize; pos += blockSize) {
-            rawPositions.push(pos);
-        }
+        for (let pos = -halfSize; pos <= halfSize; pos += blockSize) rawPositions.push(pos);
 
+        // city terrain is always flat: waterLevel irrelevant
+        const waterLevel = (terrain.terrainType === 'city') ? -100 : (terrain.waterLevel || -10);
         const allIntersections = [];
         for (const x of rawPositions) {
             for (const z of rawPositions) {
                 const h = terrain.getHeight(x, z);
-                if (h >= terrain.waterLevel + 0.5) {
-                    allIntersections.push({ x, z, h });
-                }
+                if (h >= waterLevel + 0.5) allIntersections.push({ x, z, h });
             }
         }
 
+        console.log('[city] intersections:', allIntersections.length, 'blocks:', (rawPositions.length-1)*(rawPositions.length-1));
         if (allIntersections.length < 4) {
+            console.warn('[city] too few intersections, aborting grid');
             this.intersections = [];
             return;
         }
