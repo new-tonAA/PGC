@@ -281,10 +281,10 @@ class CitySystem {
                     const slh = terrain.getHeight(slx, slz);
                     if (slh < terrain.waterLevel + 0.3) continue;
                     // Arm default points +X. Rotate group so it points toward road center.
-                    // For horiz road (along X): side=-1 means light is at -Z (south), arm points +Z (+π/2)
-                    //                        side=+1 means light is at +Z (north), arm points -Z (-π/2)
+                    // For horiz road (along X): side=-1 means light is at -Z (south), arm points +Z (+pi/2)
+                    //                        side=+1 means light is at +Z (north), arm points -Z (-pi/2)
                     // For vert road (along Z):  side=-1 means light is at -X (west), arm points +X (0)
-                    //                        side=+1 means light is at +X (east), arm points -X (π)
+                    //                        side=+1 means light is at +X (east), arm points -X (pi)
                     const armAngle = isHoriz
                         ? (side === -1 ? Math.PI / 2 : -Math.PI / 2)
                         : (side === -1 ? 0 : Math.PI);
@@ -1546,7 +1546,7 @@ class CitySystem {
             if (rh < terrain.waterLevel + 0.3) continue;
 
             const vType = VEHICLE_TYPES[Math.floor(Math.random() * VEHICLE_TYPES.length)];
-            const vehicle = this.createVehicle(isH, 1, vType); // Always direction=1 (start→end)
+            const vehicle = this.createVehicle(isH, 1, vType); // Always direction=1 (start->end)
 
             const px = isH ? rx : rx + lane;
             const pz = isH ? rz + lane : rz;
@@ -1554,7 +1554,7 @@ class CitySystem {
 
             vehicle.userData = {
                 isHorizontal: isH,
-                direction: 1,       // always start→end (one-way road)
+                direction: 1,       // always start->end (one-way road)
                 speed,
                 currentSpeed: speed,
                 halfSize,
@@ -1834,10 +1834,30 @@ class CitySystem {
         return false;
     }
 
+    findOutgoingRoad(currentRoad, endX, endZ) {
+        const nodeEps = 0.35;
+        const candidates = [];
+        for (const r of this.roads) {
+            if (r === currentRoad) continue;
+            const dx = r.start.x - endX;
+            const dz = r.start.z - endZ;
+            if ((dx * dx + dz * dz) <= nodeEps * nodeEps) {
+                candidates.push(r);
+            }
+        }
+        if (candidates.length === 0) return null;
+
+        // Prefer turning to reduce long queues on the same corridor.
+        const curIsH = Math.abs(currentRoad.dir.z) < 0.1;
+        const turning = candidates.filter(r => (Math.abs(r.dir.z) < 0.1) !== curIsH);
+        const pool = turning.length > 0 ? turning : candidates;
+        return pool[Math.floor(Math.random() * pool.length)];
+    }
+
     update(time, delta) {
         const dt = Math.min(delta || 0.016, 0.05);
 
-        // Update vehicles — each vehicle drives along its assigned road segment
+        // Update vehicles: each vehicle drives along its assigned road segment
         for (let i = 0; i < this.vehicles.length; i++) {
             const v = this.vehicles[i];
             const ud = v.userData;
@@ -1847,7 +1867,7 @@ class CitySystem {
                 continue;
             }
 
-            // Turning animation — smooth rotation when switching roads
+            // Turning animation: smooth rotation when switching roads
             if (ud.turning) {
                 ud.turnTimer += dt;
                 const newRoad = ud.road;
@@ -1869,9 +1889,12 @@ class CitySystem {
             if (!road) continue;
             const isH = Math.abs(road.dir.z) < 0.1;
 
-            // === COLLISION AVOIDANCE & TRAFFIC LIGHT CHECK ===
+            // === COLLISION: check ALL nearby vehicles (not just same road) ===
             let brakeDist = Infinity;
+
             // Traffic light ahead
+            const nextEndX = road.end.x, nextEndZ = road.end.z;
+            const distToEnd = (1.0 - ud.progress) * road.length;
             for (const tl of this.trafficLights) {
                 const tlx = tl.group.position.x, tlz = tl.group.position.z;
                 const toL = Math.sqrt((tlx-v.position.x)**2 + (tlz-v.position.z)**2);
@@ -1883,69 +1906,105 @@ class CitySystem {
                     }
                 }
             }
-            // Vehicle ahead on same road
+
+            // Check ALL vehicles (same road + crossing roads)
             for (let j = 0; j < this.vehicles.length; j++) {
                 if (i === j) continue;
                 const o = this.vehicles[j];
                 if (o.userData.isBoat || o.userData.turning) continue;
-                if (o.userData.road !== road) continue;
-                const odx = o.position.x-v.position.x, odz = o.position.z-v.position.z;
-                const od = Math.sqrt(odx*odx+odz*odz);
-                const ahead = isH ? odx : odz;  // one-way: positive = ahead in start→end direction
-                if (ahead > 0 && od < brakeDist) brakeDist = od;
+                const odx = o.position.x - v.position.x;
+                const odz = o.position.z - v.position.z;
+                const od = Math.sqrt(odx*odx + odz*odz);
+                if (od > 10) continue; // too far away
+
+                if (o.userData.road === road) {
+                    // Same road: check ahead gap
+                    const gap = (o.userData.progress - ud.progress) * road.length;
+                    if (gap > 0 && gap < brakeDist) brakeDist = gap;
+                } else {
+                    // Different road: check if this vehicle is approaching our path
+                    const oRoad = o.userData.road;
+                    if (!oRoad) continue;
+                    const oEndX = oRoad.end.x, oEndZ = oRoad.end.z;
+                    // Are we both approaching the same intersection?
+                    const sameNode = (Math.abs(nextEndX - oEndX) < 1.5 && Math.abs(nextEndZ - oEndZ) < 1.5);
+                    if (sameNode && distToEnd < 5) {
+                        // The car that's closest to the intersection has priority
+                        const oDistToEnd = (1.0 - o.userData.progress) * oRoad.length;
+                        if (oDistToEnd < distToEnd && od < brakeDist) brakeDist = od;
+                    }
+                    // Simple proximity check: if very close, brake
+                    if (od < 2.5 && od < brakeDist) brakeDist = od;
+                }
             }
-            // Adapt speed
+
+            // Speed control
             if (brakeDist < 1.5) ud.currentSpeed = 0;
-            else if (brakeDist < 5) ud.currentSpeed = Math.max(0.1, ud.speed * (brakeDist-1.5) / 3.5);
+            else if (brakeDist < 6) ud.currentSpeed = Math.max(0.1, ud.speed * (brakeDist-1.5) / 4.5);
             else ud.currentSpeed += (ud.speed - ud.currentSpeed) * Math.min(1, dt * 4);
 
-            // === MOVE ALONG ROAD (always start→end, one-way) ===
+            // === ANTI-GRIDLOCK: if stuck too long, force alternative route ===
+            if (ud.currentSpeed < 0.05) {
+                ud.stuckTimer = (ud.stuckTimer || 0) + dt;
+                if (ud.stuckTimer > 3 && ud.progress > 0.3) {
+                    // Try to switch to an alternative road early
+                    const anyRoad = this.findOutgoingRoad(road, v.position.x, v.position.z);
+                    if (anyRoad) {
+                        ud.road = anyRoad;
+                        ud.progress = 0.02;
+                        ud.lane = 0.5;
+                        ud.stuckTimer = 0;
+                    }
+                }
+            } else {
+                ud.stuckTimer = 0;
+            }
+
+            // === MOVE ALONG ROAD (always start->end, one-way) ===
             const move = ud.currentSpeed * dt * 2.5;
             ud.progress += move / Math.max(road.length, 0.1);
 
-            // === ROAD END — find crossing road, switch WITHOUT moving ===
+            // === ROAD END: switch to outgoing road (check intersection clear) ===
             if (ud.progress >= 1.0) {
                 ud.progress = 1.0;
 
-                // Record current world position
-                const carX = v.position.x;
-                const carZ = v.position.z;
+                const endX = road.end.x;
+                const endZ = road.end.z;
 
-                // Find a perpendicular road that passes through this position
-                let bestRoad = null;
-                let bestProj = 0;
-                let bestDist = Infinity;
-                for (const r of this.roads) {
-                    if (r === road) continue;
-                    const rh = Math.abs(r.dir.z) < 0.1;
-                    if (rh === isH) continue;
-                    // Project car position onto candidate road
-                    let proj, dist;
-                    if (rh) {
-                        proj = (carX - r.start.x) / Math.max(r.length, 0.1);
-                        const roadZ = r.start.z + r.dir.z * r.length * proj;
-                        dist = Math.abs(roadZ - carZ);
-                    } else {
-                        proj = (carZ - r.start.z) / Math.max(r.length, 0.1);
-                        const roadX = r.start.x + r.dir.x * r.length * proj;
-                        dist = Math.abs(roadX - carX);
-                    }
-                    if (proj >= -0.1 && proj <= 1.1 && dist < 2.0 && dist < bestDist) {
-                        bestDist = dist;
-                        bestRoad = r;
-                        bestProj = proj;
+                // Check if another vehicle is occupying this intersection
+                let intersectionOccupied = false;
+                for (let j = 0; j < this.vehicles.length; j++) {
+                    if (i === j) continue;
+                    const o = this.vehicles[j];
+                    if (o.userData.isBoat) continue;
+                    const dx = o.position.x - endX;
+                    const dz = o.position.z - endZ;
+                    if (Math.sqrt(dx*dx + dz*dz) < 2.2) {
+                        intersectionOccupied = true;
+                        break;
                     }
                 }
 
-                if (bestRoad) {
-                    ud.road = bestRoad;
-                    ud.progress = Math.max(0.02, Math.min(0.98, bestProj));
-                    ud.lane = 0.5;
-                    ud.turning = true;
-                    ud.turnTimer = 0;
+                if (intersectionOccupied) {
+                    // Wait at intersection edge until clear
+                    ud.currentSpeed = 0;
+                    // progress stays at 1.0, car holds position, re-checks next frame
                 } else {
-                    // No crossing road — start over
-                    ud.progress = 0.02;
+                    const nextRoad = this.findOutgoingRoad(road, endX, endZ);
+                    if (nextRoad) {
+                        const beforeIsH = Math.abs(road.dir.z) < 0.1;
+                        const afterIsH = Math.abs(nextRoad.dir.z) < 0.1;
+                        ud.road = nextRoad;
+                        ud.progress = 0.02;
+                        ud.lane = 0.5;
+                        ud.turning = beforeIsH !== afterIsH;
+                        ud.turnTimer = 0;
+                        ud.stuckTimer = 0;
+                    } else {
+                        // Dead-end: wrap to start
+                        ud.progress = 0.02;
+                        ud.stuckTimer = 0;
+                    }
                 }
             }
 
@@ -1960,6 +2019,23 @@ class CitySystem {
             v.rotation.y = curIsH ? 0 : Math.PI/2;
         }
 
+        // === EMERGENCY COLLISION PUSH (all vehicles, all roads) ===
+        for (let i = 0; i < this.vehicles.length; i++) {
+            for (let j = i + 1; j < this.vehicles.length; j++) {
+                const a = this.vehicles[i], b = this.vehicles[j];
+                if (a.userData.isBoat || b.userData.isBoat) continue;
+                const dx = a.position.x - b.position.x,
+                    dz = a.position.z - b.position.z;
+                const d = Math.sqrt(dx * dx + dz * dz);
+                if (d < 2.0 && d > 0.01) {
+                    const push = (2.0 - d) * 0.25;
+                    a.position.x += (dx / d) * push;
+                    a.position.z += (dz / d) * push;
+                    b.position.x -= (dx / d) * push;
+                    b.position.z -= (dz / d) * push;
+                }
+            }
+        }
 
         // Traffic light cycling
         const cycleTime = 10;
