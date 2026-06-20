@@ -246,6 +246,11 @@ class CitySystem {
             }
         }
 
+        // === LANDMARK BUILDINGS (don't count toward house slider) ===
+        if (this.intersections.length > 0) {
+            this.createLandmarkBuildings(terrain, roadPositionsX, roadPositionsZ);
+        }
+
         // === BUILDINGS — exactly buildingCount from house slider ===
         const totalBuildings = Math.max(1, this.buildingCount || 8);
         let buildingsPlaced = 0;
@@ -258,45 +263,40 @@ class CitySystem {
                 const bz1 = roadPositionsZ[j] + roadWidth / 2 + 0.8;
                 const bx2 = roadPositionsX[i + 1] - roadWidth / 2 - 0.8;
                 const bz2 = roadPositionsZ[j + 1] - roadWidth / 2 - 0.8;
-                if (bx2 - bx1 < 2 || bz2 - bz1 < 2) continue;
+                const bw = bx2 - bx1, bd = bz2 - bz1;
+                if (bw < 2.0 || bd < 2.0) continue;
                 const bcx = (bx1 + bx2) / 2, bcz = (bz1 + bz2) / 2;
                 if (terrain.getHeight(bcx, bcz) < terrain.waterLevel + 0.3) continue;
-                blocks.push({ x1: bx1, z1: bz1, x2: bx2, z2: bz2, cx: bcx, cz: bcz });
+                blocks.push({ x1: bx1, z1: bz1, w: bw, d: bd, cx: bcx, cz: bcz });
             }
         }
 
-        const maxAttempts = totalBuildings * 10;
-        for (let a = 0; a < maxAttempts && buildingsPlaced < totalBuildings; a++) {
+        for (let a = 0; a < totalBuildings * 15 && buildingsPlaced < totalBuildings; a++) {
             const b = blocks[Math.floor(Math.random() * blocks.length)];
-            const blockH = terrain.getHeight(b.cx, b.cz);
-            const dist = Math.sqrt(b.cx * b.cx + b.cz * b.cz);
-            const hf = Math.max(0.25, 1.0 - dist / (terrain.size * 0.45));
-            const bw = 2 + Math.random() * 4;
-            const bd = 2 + Math.random() * 4;
-            const bx = b.x1 + 0.5 + Math.random() * ((b.x2 - b.x1) - bw - 0.5);
-            const bz = b.z1 + 0.5 + Math.random() * ((b.z2 - b.z1) - bd - 0.5);
+            const buildW = 2 + Math.random() * Math.min(3, b.w * 0.4);
+            const buildD = 2 + Math.random() * Math.min(3, b.d * 0.4);
+            const bx = b.x1 + 1 + Math.random() * Math.max(0.1, b.w - buildW - 2);
+            const bz = b.z1 + 1 + Math.random() * Math.max(0.1, b.d - buildD - 2);
 
             // Avoid lights
-            let tooCloseToLight = false;
+            let ok = true;
             for (const lp of lightPositions) {
-                if (Math.abs(bx - lp.x) < bw/2 + 1.5 && Math.abs(bz - lp.z) < bd/2 + 1.5)
-                    { tooCloseToLight = true; break; }
+                if (Math.abs(bx - lp.x) < buildW/2 + 2.0 && Math.abs(bz - lp.z) < buildD/2 + 2.0)
+                    { ok = false; break; }
             }
-            if (tooCloseToLight) continue;
+            if (!ok) continue;
 
-            if (this.checkPenetration(bx, bz, bw, bd)) continue;
+            if (this.checkPenetration(bx, bz, buildW, buildD)) continue;
             const bbh = terrain.getHeight(bx, bz);
             if (bbh < terrain.waterLevel + 0.3) continue;
 
+            const dist = Math.sqrt(bx * bx + bz * bz);
+            const hf = Math.max(0.25, 1.0 - dist / (terrain.size * 0.45));
             const hNoise = this.noise.noise2D(bx * 0.15, bz * 0.15);
             const height = Math.max(3, 3 + Math.random() * (4 + hf * 20 + hNoise * 6));
-            this.createSkyscraper(bx, bbh, bz, bw, height, bd);
-            this.placedBuildings.push({ x: bx, z: bz, w: bw, d: bd });
+            this.createSkyscraper(bx, bbh, bz, buildW, height, buildD);
+            this.placedBuildings.push({ x: bx, z: bz, w: buildW, d: buildD });
             buildingsPlaced++;
-        }
-
-        if (this.intersections.length > 0) {
-            this.createLandmarkBuildings(terrain, roadPositionsX, roadPositionsZ);
         }
 
         // Assign one-way directions based on grid cycle topology
@@ -1837,10 +1837,18 @@ class CitySystem {
             const dx = objX - (road.start.x + road.end.x) / 2;
             const dz = objZ - (road.start.z + road.end.z) / 2;
             const isHRoad = Math.abs(road.start.z - road.end.z) < 0.1;
+            // Only reject if building overlaps the road surface itself (not sidewalks)
             if (isHRoad) {
-                if (Math.abs(dz) < road.width / 2 + objD / 2 + 0.3) return true;
+                const minClearance = road.width / 2 + 0.5;
+                if (Math.abs(dz) < minClearance) {
+                    // Also check if building is along this road segment
+                    if (Math.abs(dx) < (Math.abs(road.end.x - road.start.x) + objW) / 2) return true;
+                }
             } else {
-                if (Math.abs(dx) < road.width / 2 + objW / 2 + 0.3) return true;
+                const minClearance = road.width / 2 + 0.5;
+                if (Math.abs(dx) < minClearance) {
+                    if (Math.abs(dz) < (Math.abs(road.end.z - road.start.z) + objD) / 2) return true;
+                }
             }
         }
         return false;
