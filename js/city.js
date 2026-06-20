@@ -1563,6 +1563,8 @@ class CitySystem {
                 vehicleType: vType,
                 road: road,
                 progress: t,
+                reverse: false,
+                direction: 1,
                 turning: false,
                 turnTimer: 0,
                 turnTargetIsH: false,
@@ -1834,22 +1836,25 @@ class CitySystem {
         return false;
     }
 
+    // Returns { road, reverse } — reverse=true means car enters at road's END and goes backwards
     findOutgoingRoad(currentRoad, endX, endZ) {
-        const nodeEps = 0.35;
+        const nodeEps = 2.5;
         const candidates = [];
+        const curIsH = Math.abs(currentRoad.dir.z) < 0.1;
+
         for (const r of this.roads) {
             if (r === currentRoad) continue;
-            const dx = r.start.x - endX;
-            const dz = r.start.z - endZ;
-            if ((dx * dx + dz * dz) <= nodeEps * nodeEps) {
-                candidates.push(r);
+            const dStart = (r.start.x - endX)**2 + (r.start.z - endZ)**2;
+            const dEnd   = (r.end.x   - endX)**2 + (r.end.z   - endZ)**2;
+            const bestD = Math.min(dStart, dEnd);
+            if (bestD < nodeEps * nodeEps) {
+                candidates.push({ road: r, reverse: dEnd < dStart });
             }
         }
+
         if (candidates.length === 0) return null;
 
-        // Prefer turning to reduce long queues on the same corridor.
-        const curIsH = Math.abs(currentRoad.dir.z) < 0.1;
-        const turning = candidates.filter(r => (Math.abs(r.dir.z) < 0.1) !== curIsH);
+        const turning = candidates.filter(c => (Math.abs(c.road.dir.z) < 0.1) !== curIsH);
         const pool = turning.length > 0 ? turning : candidates;
         return pool[Math.floor(Math.random() * pool.length)];
     }
@@ -1918,8 +1923,13 @@ class CitySystem {
                 if (od > 10) continue; // too far away
 
                 if (o.userData.road === road) {
-                    // Same road: check ahead gap
-                    const gap = (o.userData.progress - ud.progress) * road.length;
+                    // Same road: check ahead gap (handle reverse direction)
+                    let gap;
+                    if (ud.reverse) {
+                        gap = (ud.progress - o.userData.progress) * road.length;
+                    } else {
+                        gap = (o.userData.progress - ud.progress) * road.length;
+                    }
                     if (gap > 0 && gap < brakeDist) brakeDist = gap;
                 } else {
                     // Different road: check if this vehicle is approaching our path
@@ -1947,12 +1957,12 @@ class CitySystem {
             if (ud.currentSpeed < 0.05) {
                 ud.stuckTimer = (ud.stuckTimer || 0) + dt;
                 if (ud.stuckTimer > 3 && ud.progress > 0.3) {
-                    // Try to switch to an alternative road early
-                    const anyRoad = this.findOutgoingRoad(road, v.position.x, v.position.z);
-                    if (anyRoad) {
-                        ud.road = anyRoad;
-                        ud.progress = 0.02;
-                        ud.lane = 0.5;
+                    const res = this.findOutgoingRoad(road, v.position.x, v.position.z);
+                    if (res) {
+                        ud.road = res.road;
+                        ud.reverse = res.reverse;
+                        ud.progress = res.reverse ? 0.98 : 0.02;
+                        ud.lane = res.reverse ? -0.5 : 0.5;
                         ud.stuckTimer = 0;
                     }
                 }
@@ -1960,16 +1970,26 @@ class CitySystem {
                 ud.stuckTimer = 0;
             }
 
-            // === MOVE ALONG ROAD (always start->end, one-way) ===
+            // === MOVE ALONG ROAD ===
             const move = ud.currentSpeed * dt * 2.5;
-            ud.progress += move / Math.max(road.length, 0.1);
+            const step = move / Math.max(road.length, 0.1);
+            if (ud.reverse) {
+                ud.progress -= step;
+                if (ud.progress <= 0.0) { ud.progress = 0.0; ud.reverse = false; }
+            } else {
+                ud.progress += step;
+            }
 
-            // === ROAD END: switch to outgoing road (check intersection clear) ===
+            // === ROAD END: switch to outgoing road ===
             if (ud.progress >= 1.0) {
                 ud.progress = 1.0;
 
                 const endX = road.end.x;
                 const endZ = road.end.z;
+
+                // Save world position BEFORE any switch
+                const savedX = v.position.x;
+                const savedZ = v.position.z;
 
                 // Check if another vehicle is occupying this intersection
                 let intersectionOccupied = false;
@@ -1977,31 +1997,38 @@ class CitySystem {
                     if (i === j) continue;
                     const o = this.vehicles[j];
                     if (o.userData.isBoat) continue;
-                    const dx = o.position.x - endX;
-                    const dz = o.position.z - endZ;
-                    if (Math.sqrt(dx*dx + dz*dz) < 2.2) {
+                    if ((o.position.x - endX)**2 + (o.position.z - endZ)**2 < 5.0) {
                         intersectionOccupied = true;
                         break;
                     }
                 }
 
                 if (intersectionOccupied) {
-                    // Wait at intersection edge until clear
                     ud.currentSpeed = 0;
-                    // progress stays at 1.0, car holds position, re-checks next frame
                 } else {
-                    const nextRoad = this.findOutgoingRoad(road, endX, endZ);
-                    if (nextRoad) {
+                    const result = this.findOutgoingRoad(road, endX, endZ);
+                    if (result) {
+                        const nextRoad = result.road;
+                        const reverse = result.reverse;
                         const beforeIsH = Math.abs(road.dir.z) < 0.1;
                         const afterIsH = Math.abs(nextRoad.dir.z) < 0.1;
                         ud.road = nextRoad;
-                        ud.progress = 0.02;
-                        ud.lane = 0.5;
+                        ud.reverse = reverse;
+                        // Compute progress from SAVED world position
+                        if (afterIsH) {
+                            ud.progress = (savedX - nextRoad.start.x) / Math.max(nextRoad.length, 0.1);
+                        } else {
+                            ud.progress = (savedZ - nextRoad.start.z) / Math.max(nextRoad.length, 0.1);
+                        }
+                        if (reverse) {
+                            ud.progress = 1.0 - ud.progress;
+                        }
+                        ud.progress = Math.max(0.01, Math.min(0.99, ud.progress));
+                        ud.lane = reverse ? -0.5 : 0.5;
                         ud.turning = beforeIsH !== afterIsH;
                         ud.turnTimer = 0;
                         ud.stuckTimer = 0;
                     } else {
-                        // Dead-end: wrap to start
                         ud.progress = 0.02;
                         ud.stuckTimer = 0;
                     }
@@ -2016,7 +2043,9 @@ class CitySystem {
             v.position.x = curIsH ? cpx : cpx + ud.lane;
             v.position.z = curIsH ? cpz + ud.lane : cpz;
             v.position.y = (this.terrain ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3 : v.position.y);
-            v.rotation.y = curIsH ? 0 : Math.PI/2;
+            v.rotation.y = curIsH
+                ? (ud.reverse ? Math.PI : 0)
+                : (ud.reverse ? -Math.PI/2 : Math.PI/2);
         }
 
         // === EMERGENCY COLLISION PUSH (all vehicles, all roads) ===
