@@ -1819,35 +1819,47 @@ class CitySystem {
     //      仅在真正死路（无顺向出口）时才允许 reverse 掉头
     // =====================================================================
     // =========================================================================
-    // 严格单向拓扑：
-    //   road.oneWay='start' → 车必须从 r.start 进入，正向行驶
-    //   road.oneWay='end'   → 车必须从 r.end   进入，反向行驶
+    // 查找出口道路：优先遵守 oneWay，没有匹配时放宽到任意交叉路
     // =========================================================================
     findOutgoingRoad(currentRoad, endX, endZ) {
         const nodeEps = 2.5;
         const curIsH = Math.abs(currentRoad.dir.z) < 0.1;
         const candidates = [];
+        const fallback = [];
 
         for (const r of this.roads) {
             if (r === currentRoad) continue;
 
-            // oneWay='start'：只允许从 r.start 进（reverse=false）
-            // oneWay='end'  ：只允许从 r.end   进（reverse=true）
-            const entryX = r.oneWay === 'end' ? r.end.x   : r.start.x;
-            const entryZ = r.oneWay === 'end' ? r.end.z   : r.start.z;
-            const needsReverse = r.oneWay === 'end';
+            const dStart = (r.start.x - endX) ** 2 + (r.start.z - endZ) ** 2;
+            const dEnd   = (r.end.x   - endX) ** 2 + (r.end.z   - endZ) ** 2;
+            const minD = Math.min(dStart, dEnd);
 
-            const d = (entryX - endX) ** 2 + (entryZ - endZ) ** 2;
-            if (d < nodeEps * nodeEps) {
-                candidates.push({ road: r, reverse: needsReverse });
+            if (minD < nodeEps * nodeEps) {
+                // 严格匹配 oneWay
+                const entryX = r.oneWay === 'end' ? r.end.x   : r.start.x;
+                const entryZ = r.oneWay === 'end' ? r.end.z   : r.start.z;
+                const strictD = (entryX - endX) ** 2 + (entryZ - endZ) ** 2;
+                const needsReverse = r.oneWay === 'end';
+
+                if (strictD < nodeEps * nodeEps) {
+                    candidates.push({ road: r, reverse: needsReverse });
+                } else {
+                    // 交叉但方向不匹配 → 后备
+                    const altReverse = dEnd < dStart;
+                    fallback.push({ road: r, reverse: altReverse });
+                }
             }
         }
 
-        if (candidates.length === 0) return null;
+        // 优先严格匹配
+        let pool = candidates.length > 0 ? candidates : fallback;
 
-        // 优先选转弯（减少同一方向排队）
-        const turning = candidates.filter(c => (Math.abs(c.road.dir.z) < 0.1) !== curIsH);
-        const pool = turning.length > 0 ? turning : candidates;
+        if (pool.length === 0) return null;
+
+        // 优先转弯
+        const turning = pool.filter(c => (Math.abs(c.road.dir.z) < 0.1) !== curIsH);
+        if (turning.length > 0) pool = turning;
+
         return pool[Math.floor(Math.random() * pool.length)];
     }
 

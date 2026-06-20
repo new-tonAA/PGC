@@ -662,39 +662,26 @@ class PCGWorld {
     // PCG incremental: update house count without full regeneration
     // Only adds/removes houses, keeps existing ones in place
     updateHouseCount() {
-        if (!this.houses) return;
+        // City mode: house slider controls building density → full rebuild
+        if (this.needsCitySystem() && this.state.terrainType !== 'islands') {
+            this.scheduleRegen();
+            return;
+        }
 
+        if (!this.houses) return;
         const newCount = this.state.terrainType === 'islands'
             ? Math.min(this.state.houseCount, 5)
             : this.state.houseCount;
+        const oldCount = this.houses.houses.length;
 
-        // Only update houses in non-city modes (or islands which have both)
-        if (!this.needsCitySystem() || this.state.terrainType === 'islands') {
-            const oldCount = this.houses.houses.length;
-
-            if (newCount > oldCount) {
-                // Add new houses incrementally - existing houses stay unchanged
-                this.houses.settlementType = this.state.settlementType;
-                const added = this.houses.addHouses(this.terrain, newCount - oldCount);
-
-                // Remove vegetation overlapping with new houses only
-                if (this.vegetation && added > 0) {
-                    const newHousePositions = this.houses.houses.slice(oldCount).map(h => ({
-                        x: h.position.x, z: h.position.z,
-                        radius: h.userData.boundingRadius || 3
-                    }));
-                    this.vegetation.removeOverlappingTrees(newHousePositions);
-                }
-            } else if (newCount < oldCount) {
-                // Remove excess houses - earlier houses stay in same positions/styles
-                this.houses.removeHouses(oldCount - newCount);
-            }
-
-            if (this.state.lightsOn) {
-                this.houses.setInteriorLights(true);
-            }
+        if (newCount > oldCount) {
+            this.houses.settlementType = this.state.settlementType;
+            this.houses.addHouses(this.terrain, newCount - oldCount);
+        } else if (newCount < oldCount) {
+            this.houses.removeHouses(oldCount - newCount);
         }
 
+        if (this.state.lightsOn) this.houses.setInteriorLights(true);
         this.updateTimeOfDay(this.state.timeOfDay);
     }
 

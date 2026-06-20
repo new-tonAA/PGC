@@ -202,17 +202,8 @@ class ProceduralTerrain {
                 h = h * falloff - 2;
                 break;
 
-            case 'suburban':
-                h = this.noise.fbm(x * scale * 0.5, z * scale * 0.5, 3) * 1.5;
-                h += this.noise.fbm(x * scale * 2, z * scale * 2, 2) * 0.2;
-                h = Math.max(h, 0);
-                break;
-
             case 'city':
-                h = this.noise.fbm(x * scale * 0.2, z * scale * 0.2, 2) * 0.3;
-                h = Math.max(h, 0);
-                break;
-
+                return 0; // completely flat for city
             default:
                 h = this.noise.fbm(x * scale, z * scale, 4) * 3;
         }
