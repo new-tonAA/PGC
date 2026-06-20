@@ -487,6 +487,7 @@ class PCGWorld {
 
         if (this.needsCitySystem()) {
             this.city.generate(this.terrain, this.state.seed, this.state.vehicleCount, {
+                buildingDensity: this.state.houseCount,
                 roadDensity: this.state.roadDensity,
                 lightSpacing: this.state.lightSpacing
             });

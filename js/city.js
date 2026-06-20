@@ -42,7 +42,7 @@ class CitySystem {
         this.scene.add(this.group);
         this.roadDensity = options.roadDensity || 50;
         this.lightSpacing = options.lightSpacing || 12;
-        this.buildingCount = options.buildingCount || 0;
+        this.buildingCount = options.buildingDensity || options.buildingCount || 8;
         const skipVehicles = options.skipVehicles || false;
 
         // Road material: Standard material for consistent appearance
@@ -1944,192 +1944,103 @@ class CitySystem {
     update(time, delta) {
         const dt = Math.min(delta || 0.016, 0.05);
 
-        // Update vehicles
+        // Update vehicles — simple road-following
         for (let i = 0; i < this.vehicles.length; i++) {
             const v = this.vehicles[i];
             const ud = v.userData;
-
             if (ud.isBoat) {
                 v.position.y += Math.sin(time * 0.8 + ud.bobOffset) * 0.002;
                 v.rotation.z = Math.sin(time * 0.5 + ud.bobOffset) * 0.03;
                 continue;
             }
 
-            // Handle turning animation
+            // Turning animation
             if (ud.turning) {
-                ud.turnProgress += dt * 3.0;
-                if (ud.turnProgress >= 1.0) {
+                ud.turnTimer += dt;
+                if (ud.turnTimer >= 0.4) {
                     ud.turning = false;
-                    ud.turnProgress = 1.0;
-                    v.position.copy(ud.turnEnd);
-                    v.rotation.y = ud.turnEndAngle;
-                } else {
-                    const t = ud.turnProgress;
-                    const smoothT = t * t * (3 - 2 * t);
-                    v.position.lerpVectors(ud.turnStart, ud.turnEnd, smoothT);
-                    // Smooth angle interpolation
-                    let angleDiff = ud.turnEndAngle - ud.turnStartAngle;
-                    while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-                    while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-                    v.rotation.y = ud.turnStartAngle + angleDiff * smoothT;
+                    ud.isHorizontal = ud.turnTargetIsH;
+                    ud.roadPos = ud.turnTargetRoad;
+                    ud.direction = ud.turnTargetDir;
+                    ud.currentSpeed = ud.speed;
                 }
+                const targetAng = ud.turnTargetIsH ? (ud.turnTargetDir > 0 ? 0 : Math.PI) : (ud.turnTargetDir > 0 ? Math.PI/2 : -Math.PI/2);
+                let d = targetAng - v.rotation.y;
+                while (d > Math.PI) d -= Math.PI*2;
+                while (d < -Math.PI) d += Math.PI*2;
+                v.rotation.y += d * dt * 6;
                 continue;
             }
 
-            // Route following
-            if (ud.route && ud.route.length >= 2) {
-                const target = ud.route[ud.routeIdx];
-                if (!target) {
-                    ud.routeIdx = 0;
-                    continue;
-                }
-
-                const dx = target.x - v.position.x;
-                const dz = target.z - v.position.z;
-                const dist = Math.sqrt(dx * dx + dz * dz);
-
-                if (dist < 1.0) {
-                    // Reached waypoint, move to next
-                    ud.routeIdx += ud.routeDir;
-
-                    if (ud.routeIdx >= ud.route.length) {
-                        ud.routeIdx = ud.route.length - 1;
-                        ud.routeDir = -1;
-                    } else if (ud.routeIdx < 0) {
-                        ud.routeIdx = 0;
-                        ud.routeDir = 1;
+            // Traffic light check
+            for (const tl of this.trafficLights) {
+                const tlx = tl.group.position.x, tlz = tl.group.position.z;
+                const toL = Math.sqrt((tlx-v.position.x)**2 + (tlz-v.position.z)**2);
+                if (toL < 6) {
+                    const ph = (time + tl.phase) % 10;
+                    const greenH = ph < 4.2;
+                    if ((ud.isHorizontal && !greenH) || (!ud.isHorizontal && greenH)) {
+                        if (toL < 2) ud.currentSpeed = 0;
+                        else ud.currentSpeed = Math.min(ud.currentSpeed, ud.speed * (toL-2)/4);
                     }
-
-                    const nextTarget = ud.route[ud.routeIdx];
-                    if (nextTarget) {
-                        const nextH = nextTarget.isHorizontal;
-                        const prevH = target.isHorizontal;
-
-                        if (nextH !== prevH) {
-                            // Initiate turn
-                            ud.turning = true;
-                            ud.turnProgress = 0;
-                            ud.turnStart = v.position.clone();
-                            ud.turnEnd = new THREE.Vector3(nextTarget.x, v.position.y, nextTarget.z);
-                            ud.turnStartAngle = v.rotation.y;
-
-                            // Calculate target angle based on direction
-                            if (nextH) {
-                                ud.turnEndAngle = nextTarget.direction > 0 ? 0 : Math.PI;
-                            } else {
-                                ud.turnEndAngle = nextTarget.direction > 0 ? Math.PI / 2 : -Math.PI / 2;
-                            }
-
-                            // Normalize angle difference
-                            let angleDiff = ud.turnEndAngle - ud.turnStartAngle;
-                            while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-                            while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-                            ud.turnEndAngle = ud.turnStartAngle + angleDiff;
-
-                            ud.isHorizontal = nextH;
-                            ud.direction = nextTarget.direction;
-                        } else {
-                            ud.isHorizontal = nextH;
-                            ud.direction = nextTarget.direction;
-                        }
-                    }
-                } else {
-                    // Check for nearby vehicles and adjust speed
-                    let minDist = Infinity;
-                    for (let j = 0; j < this.vehicles.length; j++) {
-                        if (i === j) continue;
-                        const other = this.vehicles[j];
-                        if (other.userData.isBoat) continue;
-                        if (other.userData.turning) continue;
-
-                        const odx = other.position.x - v.position.x;
-                        const odz = other.position.z - v.position.z;
-                        const od = Math.sqrt(odx * odx + odz * odz);
-
-                        // Only care about vehicles ahead in the same direction
-                        const dotProduct = (dx * odx + dz * odz) / (dist * od + 0.001);
-                        if (dotProduct > 0.3 && od < minDist) {
-                            minDist = od;
-                        }
-                    }
-
-                    // Check if approaching a red traffic light on this route
-                    for (const tl of this.trafficLights) {
-                        const tlx = tl.group.position.x;
-                        const tlz = tl.group.position.z;
-                        const toLight = Math.sqrt((tlx - v.position.x) ** 2 + (tlz - v.position.z) ** 2);
-                        if (toLight < 5) {
-                            // Determine which light phase is red for our direction
-                            const cycleTime = 10;
-                            const phase = (time + tl.phase) % cycleTime;
-                            const isGreenH = phase < cycleTime * 0.42;
-                            const weAreH = target.isHorizontal;
-                            if ((weAreH && !isGreenH) || (!weAreH && isGreenH)) {
-                                // Red for us — slow down
-                                if (toLight < 2.0) {
-                                    ud.currentSpeed = 0;
-                                } else {
-                                    ud.currentSpeed = Math.min(ud.currentSpeed, ud.speed * (toLight - 2.0) / 3.0);
-                                }
-                            }
-                        }
-                    }
-
-                    // Adaptive speed based on traffic
-                    if (minDist < 4.0) {
-                        // Slow down for nearby vehicles
-                        const slowdown = Math.max(0.15, minDist / 4.0);
-                        ud.currentSpeed += (ud.speed * slowdown - ud.currentSpeed) * Math.min(1, dt * 5);
-                    } else if (minDist < 8.0) {
-                        // Moderate speed
-                        const moderate = 0.6 + (minDist - 4.0) / 4.0 * 0.4;
-                        ud.currentSpeed += (ud.speed * moderate - ud.currentSpeed) * Math.min(1, dt * 3);
-                    } else {
-                        // Full speed
-                        ud.currentSpeed += (ud.speed - ud.currentSpeed) * Math.min(1, dt * 2);
-                    }
-
-                    // Move along route — locked to road axis
-                    const moveAmount = ud.currentSpeed * dt;
-                    if (target.isHorizontal) {
-                        v.position.x += (dx > 0 ? 1 : -1) * Math.min(moveAmount, Math.abs(dx));
-                        v.position.z = target.z; // Lock Z to road
-                    } else {
-                        v.position.z += (dz > 0 ? 1 : -1) * Math.min(moveAmount, Math.abs(dz));
-                        v.position.x = target.x; // Lock X to road
-                    }
-                    const ny = this.terrain ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3 : v.position.y;
-                    v.position.y = ny;
-
-                    // Snap to road-aligned angle (0, ±π/2, π) — no diagonal drifting
-                    const targetAngle = target.isHorizontal
-                        ? (target.direction > 0 ? 0 : Math.PI)
-                        : (target.direction > 0 ? Math.PI / 2 : -Math.PI / 2);
-                    let aDiff = targetAngle - v.rotation.y;
-                    while (aDiff > Math.PI) aDiff -= Math.PI * 2;
-                    while (aDiff < -Math.PI) aDiff += Math.PI * 2;
-                    v.rotation.y += aDiff * Math.min(1, dt * 6);
                 }
             }
 
-            // Collision avoidance push (emergency separation)
-            for (let j = i + 1; j < this.vehicles.length; j++) {
-                const other = this.vehicles[j];
-                if (other.userData.isBoat || other.userData.turning) continue;
-                const ddx = v.position.x - other.position.x;
-                const ddz = v.position.z - other.position.z;
-                const dd = Math.sqrt(ddx * ddx + ddz * ddz);
-                if (dd < 2.0 && dd > 0.01) {
-                    const pushStrength = (2.0 - dd) * 0.4;
-                    const nx = ddx / dd;
-                    const nz = ddz / dd;
-                    v.position.x += nx * pushStrength * 0.5;
-                    v.position.z += nz * pushStrength * 0.5;
-                    other.position.x -= nx * pushStrength * 0.5;
-                    other.position.z -= nz * pushStrength * 0.5;
+            // Adaptive speed — slow for vehicles ahead
+            let minAhead = Infinity;
+            for (let j = 0; j < this.vehicles.length; j++) {
+                if (i === j) continue;
+                const o = this.vehicles[j];
+                if (o.userData.isBoat || o.userData.turning) continue;
+                const odx = o.position.x-v.position.x, odz = o.position.z-v.position.z;
+                const od = Math.sqrt(odx*odx+odz*odz);
+                const ahead = ud.isHorizontal ? ud.direction*odx : ud.direction*odz;
+                if (ahead > 0 && od < minAhead) minAhead = od;
+            }
+            if (minAhead < 3) ud.currentSpeed = Math.max(0.15, ud.speed*minAhead/3);
+            else if (minAhead < 6) ud.currentSpeed = ud.speed*(0.4+(minAhead-3)/6*0.6);
+            else ud.currentSpeed += (ud.speed-ud.currentSpeed)*Math.min(1,dt*3);
+
+            // Strict road-following movement
+            const mv = ud.currentSpeed * dt * 2;
+            if (ud.isHorizontal) {
+                v.position.x += ud.direction * mv;
+                if (v.position.x > ud.halfSize+3) { v.position.x = ud.halfSize+2; ud.direction = -1; }
+                if (v.position.x < -ud.halfSize-3) { v.position.x = -ud.halfSize-2; ud.direction = 1; }
+                v.position.z = ud.roadPos + (ud.lane || 0);
+                v.rotation.y = ud.direction > 0 ? 0 : Math.PI;
+            } else {
+                v.position.z += ud.direction * mv;
+                if (v.position.z > ud.halfSize+3) { v.position.z = ud.halfSize+2; ud.direction = -1; }
+                if (v.position.z < -ud.halfSize-3) { v.position.z = -ud.halfSize-2; ud.direction = 1; }
+                v.position.x = ud.roadPos + (ud.lane || 0);
+                v.rotation.y = ud.direction > 0 ? Math.PI/2 : -Math.PI/2;
+            }
+            v.position.y = (this.terrain ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3 : v.position.y);
+
+            // Turn at intersections (3% chance each frame near an intersection)
+            if (Math.random() < 0.004 && !ud.turning) {
+                const nh = !ud.isHorizontal;
+                const nd = Math.random() > 0.5 ? 1 : -1;
+                const ni = this.findNextIntersection(v.position.x, v.position.z, nh, nd, this.terrain);
+                if (ni) {
+                    ud.turning = true; ud.turnTimer = 0;
+                    ud.turnTargetIsH = nh; ud.turnTargetRoad = nh ? ni.z : ni.x; ud.turnTargetDir = nd;
                 }
             }
         }
+
+        // Collision avoidance
+        for (let i = 0; i < this.vehicles.length; i++) {
+            for (let j = i+1; j < this.vehicles.length; j++) {
+                const a = this.vehicles[i], b = this.vehicles[j];
+                if (a.userData.isBoat || b.userData.isBoat) continue;
+                const dx = a.position.x-b.position.x, dz = a.position.z-b.position.z;
+                const d = Math.sqrt(dx*dx+dz*dz);
+                if (d < 2.0 && d > 0.01) { const p = (2.0-d)*0.3; a.position.x+=dx/d*p; a.position.z+=dz/d*p; b.position.x-=dx/d*p; b.position.z-=dz/d*p; }
+            }
+        }
+
 
         // Traffic light cycling
         const cycleTime = 10;
@@ -2254,55 +2165,38 @@ class CitySystem {
         }
     }
 
-    // ==========================================
-    // REGENERATE STREET LIGHTS (no full rebuild)
-    // ==========================================
     regenerateStreetLights(terrain) {
-        // Remove existing street lights
         for (const sl of this.streetLightLamps) {
             this.group.remove(sl.group);
-            sl.group.traverse(child => {
-                if (child.geometry) child.geometry.dispose();
-                if (child.material) {
-                    if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
-                    else child.material.dispose();
-                }
-            });
+            sl.group.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) c.material.dispose(); });
         }
         this.streetLightLamps = [];
-
-        // Re-place along existing roads
         const spacing = this.lightSpacing;
         const placed = new Set();
-
         for (const road of this.roads) {
-            const roadLen = road.length;
-            const isHoriz = Math.abs(road.dir.z) < 0.1;
-            const numLights = Math.max(1, Math.floor(roadLen / spacing));
-
-            for (let l = 0; l < numLights; l++) {
-                const t = (l + 0.5) / numLights;
-                const lx = road.start.x + road.dir.x * roadLen * t;
-                const lz = road.start.z + road.dir.z * roadLen * t;
+            const len = road.length, isH = Math.abs(road.dir.z) < 0.1;
+            const n = Math.max(1, Math.floor(len / spacing));
+            for (let l = 0; l < n; l++) {
+                const t = (l + 0.5) / n;
+                const lx = road.start.x + road.dir.x * len * t;
+                const lz = road.start.z + road.dir.z * len * t;
                 const lk = Math.round(lx) + ',' + Math.round(lz);
                 if (placed.has(lk)) continue;
                 const lh = terrain.getHeight(lx, lz);
                 if (lh < terrain.waterLevel + 0.3) continue;
                 for (const side of [-1, 1]) {
-                    const offset = side * (road.width / 2 + 0.6);
-                    const slx = isHoriz ? lx : lx + offset;
-                    const slz = isHoriz ? lz + offset : lz;
+                    const off = side * (road.width / 2 + 0.6);
+                    const slx = isH ? lx : lx + off, slz = isH ? lz + off : lz;
                     const slh = terrain.getHeight(slx, slz);
                     if (slh < terrain.waterLevel + 0.3) continue;
-                    const armAngle = isHoriz
-                        ? (side === -1 ? Math.PI / 2 : -Math.PI / 2)
-                        : (side === -1 ? 0 : Math.PI);
-                    this.createStreetLight(slx, slh, slz, terrain, armAngle);
+                    const arm = isH ? (side === -1 ? Math.PI / 2 : -Math.PI / 2) : (side === -1 ? 0 : Math.PI);
+                    this.createStreetLight(slx, slh, slz, terrain, arm);
                 }
                 placed.add(lk);
             }
         }
     }
+
 
     clear() {
         this.group.traverse((child) => {
