@@ -45,7 +45,6 @@ class CitySystem {
         this.buildingCount = options.buildingDensity || options.buildingCount || 8;
         const skipVehicles = options.skipVehicles || false;
 
-        // Road material: Standard material for consistent appearance
         this.roadMat = new THREE.MeshStandardMaterial({
             color: 0x3a3a40,
             roughness: 0.85,
@@ -73,13 +72,11 @@ class CitySystem {
         this.halfSize = halfSize;
         this.roadWidth = roadWidth;
 
-        // Generate grid positions
         const rawPositions = [];
         for (let pos = -halfSize; pos <= halfSize; pos += blockSize) {
             rawPositions.push(pos);
         }
 
-        // Find all valid intersection positions (above water)
         const allIntersections = [];
         for (const x of rawPositions) {
             for (const z of rawPositions) {
@@ -95,7 +92,6 @@ class CitySystem {
             return;
         }
 
-        // Build grid adjacency: count neighbors in the grid
         const interKey = (ix, iz) => `${Math.round(ix)},${Math.round(iz)}`;
         const interSet = new Set(allIntersections.map(i => interKey(i.x, i.z)));
         const adjacency = new Map();
@@ -112,8 +108,6 @@ class CitySystem {
             adjacency.set(key, neighbors);
         }
 
-        // Filter: keep intersections with >= 2 neighbors (well-connected grid)
-        // Edge intersections (boundary of grid) kept with >= 1 neighbor
         const isGridEdge = (x, z) => {
             return Math.abs(x - rawPositions[0]) < 0.5 || Math.abs(x - rawPositions[rawPositions.length-1]) < 0.5 ||
                    Math.abs(z - rawPositions[0]) < 0.5 || Math.abs(z - rawPositions[rawPositions.length-1]) < 0.5;
@@ -126,7 +120,6 @@ class CitySystem {
         });
 
         if (validIntersections.length < 4) {
-            // Fallback: use all intersections if filtering removed too many
             this.intersections = allIntersections;
         } else {
             this.intersections = validIntersections;
@@ -140,10 +133,8 @@ class CitySystem {
         this.roadPositionsX = roadPositionsX;
         this.roadPositionsZ = roadPositionsZ;
 
-        // Track which intersection pairs have roads (to avoid duplicates)
         const roadPairs = new Set();
 
-        // Create horizontal roads (constant Z)
         for (const fixedZ of roadPositionsZ) {
             const intersOnRow = this.intersections.filter(i => Math.abs(i.z - fixedZ) < 0.1);
             if (intersOnRow.length < 2) continue;
@@ -155,7 +146,6 @@ class CitySystem {
                 const pairKey = `${interKey(startInter.x, startInter.z)}->${interKey(endInter.x, endInter.z)}`;
                 if (roadPairs.has(pairKey)) continue;
 
-                // Check road path doesn't cross water
                 let allAboveWater = true;
                 const steps = Math.ceil(Math.abs(endInter.x - startInter.x) / 1.5);
                 for (let s = 0; s <= steps; s++) {
@@ -177,7 +167,6 @@ class CitySystem {
             }
         }
 
-        // Create vertical roads (constant X)
         for (const fixedX of roadPositionsX) {
             const intersOnCol = this.intersections.filter(i => Math.abs(i.x - fixedX) < 0.1);
             if (intersOnCol.length < 2) continue;
@@ -210,12 +199,10 @@ class CitySystem {
             }
         }
 
-        // Create intersection pads and traffic lights at well-connected intersections
         for (const inter of this.intersections) {
             const h = terrain.getHeight(inter.x, inter.z);
             const n = adjacency.get(interKey(inter.x, inter.z)) || 0;
             this.createIntersection(inter.x, inter.z, h, roadWidth);
-            // More traffic lights at busy intersections
             if (n >= 3 && Math.random() < 0.6) {
                 this.createTrafficLight(inter.x, inter.z, h, roadWidth);
             } else if (n >= 2 && Math.random() < 0.25) {
@@ -223,7 +210,6 @@ class CitySystem {
             }
         }
 
-        // Place buildings in grid blocks
         const maxBuildings = this.buildingCount > 0 ? this.buildingCount : 999;
         let buildingPlaced = 0;
 
@@ -249,12 +235,10 @@ class CitySystem {
             if (buildingPlaced >= maxBuildings) break;
         }
 
-        // Landmark buildings near center
         if (this.intersections.length > 0) {
             this.createLandmarkBuildings(terrain, roadPositionsX, roadPositionsZ);
         }
 
-        // Street lights - place along road edges, not in intersections
         const spacing = this.lightSpacing;
         const placedLightPositions = new Set();
 
@@ -273,18 +257,12 @@ class CitySystem {
                 const lh = terrain.getHeight(lx, lz);
                 if (lh < terrain.waterLevel + 0.3) continue;
 
-                // Place on both sides of the road, each facing toward the road
                 for (const side of [-1, 1]) {
                     const offset = side * (road.width / 2 + 0.6);
                     const slx = isHoriz ? lx : lx + offset;
                     const slz = isHoriz ? lz + offset : lz;
                     const slh = terrain.getHeight(slx, slz);
                     if (slh < terrain.waterLevel + 0.3) continue;
-                    // Arm default points +X. Rotate group so it points toward road center.
-                    // For horiz road (along X): side=-1 means light is at -Z (south), arm points +Z (+pi/2)
-                    //                        side=+1 means light is at +Z (north), arm points -Z (-pi/2)
-                    // For vert road (along Z):  side=-1 means light is at -X (west), arm points +X (0)
-                    //                        side=+1 means light is at +X (east), arm points -X (pi)
                     const armAngle = isHoriz
                         ? (side === -1 ? Math.PI / 2 : -Math.PI / 2)
                         : (side === -1 ? 0 : Math.PI);
@@ -294,7 +272,61 @@ class CitySystem {
             }
         }
 
+        // Assign one-way directions based on grid cycle topology
+        this.resolveRoadOneWayDirections(roadPositionsX, roadPositionsZ);
+
         this.generateVehicles(terrain, roadPositionsX, roadPositionsZ, halfSize, vehicleCount);
+    }
+
+    // ==========================================
+    // RESOLVE ROAD ONE-WAY DIRECTIONS
+    // Checkerboard pattern: each grid cell is a cycle. Adjacent cells
+    // have opposite parity, guaranteeing shared road edges agree.
+    // ==========================================
+    resolveRoadOneWayDirections(xs, zs) {
+        // Checkerboard: cell(col,row) CW if (col+row)%2==0. Handle negative indices.
+        const cellCW = (c, r) => ((c < 0 ? (c % 2 + 2) % 2 : c) + (r < 0 ? (r % 2 + 2) % 2 : r)) % 2 === 0;
+
+        for (const road of this.roads) {
+            const isH = Math.abs(road.dir.z) < 0.1;
+            const midX = (road.start.x + road.end.x) / 2;
+            const midZ = (road.start.z + road.end.z) / 2;
+
+            let col = -1, row = -1;
+            let isCW;
+
+            if (isH) {
+                for (let c = 0; c < xs.length - 1; c++)
+                    if (midX >= xs[c] - 0.5 && midX <= xs[c+1] + 0.5) { col = c; break; }
+                for (let r = 0; r < zs.length; r++)
+                    if (Math.abs(road.start.z - zs[r]) < 0.5) { row = r; break; }
+                if (col < 0 || row < 0) { road.oneWay = 'start'; continue; }
+
+                // Prefer cell ABOVE (bottom edge). Fallback: cell BELOW (top edge, invert).
+                if (row < zs.length - 1) isCW = cellCW(col, row);
+                else isCW = !cellCW(col, row - 1);
+
+                // Horizontal: CW→east(x+), CCW→west(x-)
+                road.oneWay = (isCW === (road.start.x < road.end.x)) ? 'start' : 'end';
+            } else {
+                for (let c = 0; c < xs.length; c++)
+                    if (Math.abs(road.start.x - xs[c]) < 0.5) { col = c; break; }
+                for (let r = 0; r < zs.length - 1; r++)
+                    if (midZ >= zs[r] - 0.5 && midZ <= zs[r+1] + 0.5) { row = r; break; }
+                if (col < 0 || row < 0) { road.oneWay = 'start'; continue; }
+
+                // Prefer cell to the RIGHT (left edge). Fallback: cell LEFT (right edge, invert).
+                if (col < xs.length - 1) isCW = cellCW(col, row);
+                else isCW = !cellCW(col - 1, row);
+
+                // Vertical: CW left-edge→south(z-), CCW left-edge→north(z+)
+                // oneWay='start' means start→end is the correct direction.
+                // CW: should go south, so start.z > end.z.
+                // CCW: should go north, so start.z < end.z.
+                const shouldGoNorth = !isCW;
+                road.oneWay = (shouldGoNorth === (road.start.z < road.end.z)) ? 'start' : 'end';
+            }
+        }
     }
 
     findValidRoadSegments(fixedPos, roadPositions, terrain, isHorizontal) {
@@ -337,15 +369,12 @@ class CitySystem {
             }
         }
 
-        // Also add stub roads from endpoints that connect to at least one intersection
         for (const p of sorted) {
             const idx = sorted.indexOf(p);
             const hasPrev = idx > 0;
             const hasNext = idx < sorted.length - 1;
 
             if (!hasPrev) {
-                const x = isHorizontal ? p - 3 : fixedPos;
-                const z = isHorizontal ? fixedPos : p - 3;
                 if (terrain.getHeight(
                     isHorizontal ? p - 3 : fixedPos,
                     isHorizontal ? fixedPos : p - 3
@@ -398,7 +427,6 @@ class CitySystem {
         const segments = Math.max(2, Math.ceil(length / 4));
         const segLen = length / segments;
 
-        // Road surface segments - conform to terrain
         for (let s = 0; s < segments; s++) {
             const t0 = s / segments;
             const t1 = (s + 1) / segments;
@@ -425,7 +453,6 @@ class CitySystem {
             this.group.add(seg);
         }
 
-        // Center dashes (white)
         const dashCount = Math.floor(length / 2);
         for (let d = 0; d < dashCount; d++) {
             if (d % 2 === 0) continue;
@@ -443,7 +470,6 @@ class CitySystem {
             this.group.add(dash);
         }
 
-        // Edge lines (white) - continuous
         const mid = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
         const midH = terrain.getHeight(mid.x, mid.z);
         const roadY = midH + 0.09;
@@ -470,7 +496,6 @@ class CitySystem {
         intersection.receiveShadow = true;
         this.group.add(intersection);
 
-        // Crosswalk stripes at all 4 intersection entrances
         for (const rot of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {
             const cosR = Math.cos(rot);
             const sinR = Math.sin(rot);
@@ -479,7 +504,6 @@ class CitySystem {
                 const stripe = new THREE.Mesh(stripeGeo, this.roadLineMat);
                 stripe.rotation.x = -Math.PI / 2;
                 stripe.rotation.z = rot;
-                // Place stripes just outside intersection pad
                 const offsetX = cosR * (roadWidth / 2 + 0.25);
                 const offsetZ = sinR * (roadWidth / 2 + 0.25);
                 const lateralOffset = s * 0.3;
@@ -502,7 +526,6 @@ class CitySystem {
         pole.position.y = 1.75;
         group.add(pole);
 
-        // Arm extending over road
         const armGeo = new THREE.CylinderGeometry(0.03, 0.03, 1.5, 4);
         const arm = new THREE.Mesh(armGeo, poleMat);
         arm.rotation.z = Math.PI / 2;
@@ -536,7 +559,6 @@ class CitySystem {
             bulbs.push(bulb);
         }
 
-        // Traffic light glow
         const tLight = new THREE.PointLight(0xff0000, 0.5, 8, 2);
         tLight.position.set(1.5, 3.7, 0);
         group.add(tLight);
@@ -560,7 +582,6 @@ class CitySystem {
 
         const group = new THREE.Group();
 
-        // Pole
         const poleGeo = new THREE.CylinderGeometry(0.05, 0.07, 4.5, 8);
         const poleMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
         const pole = new THREE.Mesh(poleGeo, poleMat);
@@ -568,14 +589,12 @@ class CitySystem {
         pole.castShadow = true;
         group.add(pole);
 
-        // Curved arm
         const armGeo = new THREE.CylinderGeometry(0.04, 0.04, 1.6, 6);
         const arm = new THREE.Mesh(armGeo, poleMat);
         arm.rotation.z = Math.PI / 2;
         arm.position.set(0.8, 4.35, 0);
         group.add(arm);
 
-        // Lamp housing
         const lampGeo = new THREE.BoxGeometry(0.6, 0.14, 0.35);
         const lampMat = new THREE.MeshStandardMaterial({
             color: 0xfff0dd,
@@ -590,7 +609,6 @@ class CitySystem {
         lamp.position.set(0.8, 4.28, 0);
         group.add(lamp);
 
-        // Visible glow disc under lamp
         const glowGeo = new THREE.CircleGeometry(1.2, 16);
         const glowMat = new THREE.MeshBasicMaterial({
             color: 0xffffcc,
@@ -605,7 +623,6 @@ class CitySystem {
         glow.position.set(0.8, 4.15, 0);
         group.add(glow);
 
-        // Main SpotLight pointing down to illuminate the road
         const spotLight = new THREE.SpotLight(0xffeebb, 0, 35, Math.PI / 3, 0.5, 1.5);
         spotLight.position.set(0.8, 4.2, 0);
         spotLight.target.position.set(0.8, -0.5, 0);
@@ -618,13 +635,11 @@ class CitySystem {
         group.add(spotLight);
         group.add(spotLight.target);
 
-        // Secondary PointLight for ambient fill around the pole
         const sLight = new THREE.PointLight(0xffeebb, 0, 25, 1.8);
         sLight.position.set(0.8, 3.8, 0);
         sLight.castShadow = false;
         group.add(sLight);
 
-        // Ground light cone indicator (visual only)
         const coneGeo = new THREE.ConeGeometry(1.5, 0.08, 8);
         const coneMat = new THREE.MeshBasicMaterial({
             color: 0xffffdd,
@@ -639,7 +654,6 @@ class CitySystem {
         cone.rotation.x = -Math.PI;
         group.add(cone);
 
-        // Rotate entire group so arm points toward the road
         if (roadDirection !== null) {
             group.rotation.y = roadDirection;
         }
@@ -899,7 +913,6 @@ class CitySystem {
         let wallColor;
         let buildingStyle;
 
-        // Expanded building styles for more diversity
         if (isTall) {
             if (styleRoll < 0.15) {
                 wallColor = new THREE.Color(0.4, 0.55, 0.65);
@@ -974,7 +987,6 @@ class CitySystem {
             }
         }
 
-        // Main body
         const bodyGeo = new THREE.BoxGeometry(width, height, depth);
         const bodyMat = new THREE.MeshPhongMaterial({
             color: wallColor,
@@ -987,7 +999,6 @@ class CitySystem {
         body.receiveShadow = true;
         group.add(body);
 
-        // Building style-specific details
         if (isTall && buildingStyle === 'glass_blue') {
             const stripeCount = Math.floor(height / 2);
             for (let s = 0; s < stripeCount; s++) {
@@ -1032,7 +1043,6 @@ class CitySystem {
         }
 
         if (isTall && buildingStyle === 'setback') {
-            // Gradual setbacks
             for (let s = 0; s < 3; s++) {
                 const t = 1 - s * 0.2;
                 const setH = height * 0.15;
@@ -1048,7 +1058,6 @@ class CitySystem {
         }
 
         if (isTall && buildingStyle === 'crown') {
-            // Decorative crown on top
             const crownH = height * 0.15;
             const crownGeo = new THREE.CylinderGeometry(width * 0.35, width * 0.45, crownH, 8);
             const crownMat = new THREE.MeshPhongMaterial({
@@ -1108,14 +1117,12 @@ class CitySystem {
         }
 
         if (buildingStyle === 'shop_front') {
-            // Ground floor shop with different color and awning
             const shopGeo = new THREE.BoxGeometry(width + 0.05, height * 0.2, depth + 0.05);
             const shopMat = new THREE.MeshPhongMaterial({ color: 0x445566, shininess: 50 });
             const shop = new THREE.Mesh(shopGeo, shopMat);
             shop.position.y = height * 0.1;
             group.add(shop);
 
-            // Awning
             const awningGeo = new THREE.BoxGeometry(width + 0.3, 0.04, 0.8);
             const awningMat = new THREE.MeshPhongMaterial({ color: 0xcc4444 });
             const awning = new THREE.Mesh(awningGeo, awningMat);
@@ -1124,14 +1131,12 @@ class CitySystem {
         }
 
         if (buildingStyle === 'green_roof') {
-            // Green rooftop area
             const roofGeo = new THREE.BoxGeometry(width - 0.2, 0.15, depth - 0.2);
             const roofMat = new THREE.MeshPhongMaterial({ color: 0x336633 });
             const roof = new THREE.Mesh(roofGeo, roofMat);
             roof.position.y = height + 0.075;
             group.add(roof);
 
-            // Small plants on roof
             for (let p = 0; p < 3; p++) {
                 const plantGeo = new THREE.SphereGeometry(0.15, 5, 4);
                 const plantMat = new THREE.MeshPhongMaterial({ color: 0x227722 });
@@ -1146,7 +1151,6 @@ class CitySystem {
         }
 
         if (buildingStyle === 'small_cottage') {
-            // Pitched roof for cottage
             const roofH = 1.0;
             const roofGeo = new THREE.ConeGeometry(Math.max(width, depth) * 0.65, roofH, 4);
             const roofMat = new THREE.MeshPhongMaterial({ color: 0x884422, flatShading: true });
@@ -1156,7 +1160,6 @@ class CitySystem {
             roof.castShadow = true;
             group.add(roof);
 
-            // Chimney
             const chimGeo = new THREE.BoxGeometry(0.25, 0.7, 0.25);
             const chimMat = new THREE.MeshPhongMaterial({ color: 0x665544 });
             const chimney = new THREE.Mesh(chimGeo, chimMat);
@@ -1165,7 +1168,6 @@ class CitySystem {
         }
 
         if (buildingStyle === 'small_balcony') {
-            // Balconies on sides
             for (let b = 0; b < 2; b++) {
                 const balcGeo = new THREE.BoxGeometry(width * 0.8, 0.06, 0.5);
                 const balcMat = new THREE.MeshPhongMaterial({ color: 0x999999 });
@@ -1173,7 +1175,6 @@ class CitySystem {
                 balc.position.set(0, 1.5 + b * 1.5, depth / 2 + 0.25);
                 group.add(balc);
 
-                // Railing
                 const railGeo = new THREE.BoxGeometry(width * 0.8, 0.3, 0.03);
                 const railMat = new THREE.MeshPhongMaterial({ color: 0x666666 });
                 const rail = new THREE.Mesh(railGeo, railMat);
@@ -1182,7 +1183,6 @@ class CitySystem {
             }
         }
 
-        // Windows with emissive
         const windowRows = Math.floor(height / 0.8);
         const windowColsW = Math.floor(width / 0.8);
         const windowColsD = Math.floor(depth / 0.8);
@@ -1198,7 +1198,6 @@ class CitySystem {
 
         const windowMeshes = [];
 
-        // Front/back windows
         for (let row = 0; row < windowRows; row++) {
             const wy = 0.5 + row * 0.8;
             if (wy > height - 0.5) break;
@@ -1223,7 +1222,6 @@ class CitySystem {
             }
         }
 
-        // Side windows
         for (let row = 0; row < windowRows; row++) {
             const wy = 0.5 + row * 0.8;
             if (wy > height - 0.5) break;
@@ -1251,7 +1249,6 @@ class CitySystem {
 
         group.userData.windowMeshes = windowMeshes;
 
-        // Rooftop details
         if (isTall) {
             const antennaH = 1.5 + Math.random() * 2;
             const antennaGeo = new THREE.CylinderGeometry(0.03, 0.05, antennaH, 4);
@@ -1301,7 +1298,6 @@ class CitySystem {
             }
         }
 
-        // Interior light - powerful for visible illumination
         const interiorLight = new THREE.PointLight(0xffcc66, 0, 65, 2.0);
         interiorLight.position.set(0, height * 0.6, 0);
         interiorLight.castShadow = false;
@@ -1422,7 +1418,6 @@ class CitySystem {
         const baseR = 1.2;
         const topR = 0.55;
 
-        // Base platform
         const baseGeo = new THREE.CylinderGeometry(baseR + 0.3, baseR + 0.2, baseH * 0.6, 8);
         const baseMat2 = new THREE.MeshPhongMaterial({ color: 0x666666, flatShading: true });
         const basePlatform = new THREE.Mesh(baseGeo, baseMat2);
@@ -1430,7 +1425,6 @@ class CitySystem {
         basePlatform.castShadow = true;
         group.add(basePlatform);
 
-        // Main tower
         const towerGeo = new THREE.CylinderGeometry(topR, baseR, towerH, 12);
         const towerMat = new THREE.MeshPhongMaterial({ color: 0xeeeeee, flatShading: true, shininess: 30 });
         const tower = new THREE.Mesh(towerGeo, towerMat);
@@ -1438,7 +1432,6 @@ class CitySystem {
         tower.castShadow = true;
         group.add(tower);
 
-        // Red stripes
         for (let s = 0; s < 4; s++) {
             const stripeH = towerH / 8;
             const stripeR = baseR + (topR - baseR) * (0.1 + s * 0.25);
@@ -1449,7 +1442,6 @@ class CitySystem {
             group.add(stripe);
         }
 
-        // Lantern room
         const lanternGeo = new THREE.CylinderGeometry(0.8, 0.65, 1.4, 10);
         const lanternMat = new THREE.MeshPhongMaterial({
             color: 0xffffcc, transparent: true, opacity: 0.85,
@@ -1459,7 +1451,6 @@ class CitySystem {
         lantern.position.y = baseH + towerH + 0.7;
         group.add(lantern);
 
-        // Glass panels around lantern
         for (let g = 0; g < 8; g++) {
             const glassAngle = (g / 8) * Math.PI * 2;
             const glassGeo = new THREE.PlaneGeometry(0.4, 1.0);
@@ -1477,14 +1468,12 @@ class CitySystem {
             group.add(glass);
         }
 
-        // Roof
         const roofGeo = new THREE.ConeGeometry(0.9, 0.9, 10);
         const roofMat = new THREE.MeshPhongMaterial({ color: 0x333333, shininess: 50 });
         const roof = new THREE.Mesh(roofGeo, roofMat);
         roof.position.y = baseH + towerH + 1.85;
         group.add(roof);
 
-        // Antenna/lightning rod on top
         const rodGeo = new THREE.CylinderGeometry(0.03, 0.05, 0.6, 6);
         const rodMat = new THREE.MeshPhongMaterial({ color: 0x888888, shininess: 100 });
         const rod = new THREE.Mesh(rodGeo, rodMat);
@@ -1498,7 +1487,6 @@ class CitySystem {
         group.add(topBulb);
         group.userData.topBulb = topBulb;
 
-        // Powerful sweeping beam - SpotLight
         const beamLight = new THREE.SpotLight(0xffffcc, 10, 80, Math.PI / 7, 0.25, 1.5);
         beamLight.position.set(0, baseH + towerH + 0.7, 0);
         beamLight.castShadow = false;
@@ -1510,13 +1498,11 @@ class CitySystem {
         group.userData.beamLight = beamLight;
         group.userData.beamTarget = beamTarget;
 
-        // Lantern ambient glow - visible from all directions
         const lanternGlow = new THREE.PointLight(0xffffcc, 3, 30, 2);
         lanternGlow.position.set(0, baseH + towerH + 0.7, 0);
         group.add(lanternGlow);
         group.userData.lanternGlow = lanternGlow;
 
-        // Top red beacon
         const topLight = new THREE.PointLight(0xff2222, 0, 15, 2);
         topLight.position.set(0, baseH + towerH + 2.65, 0);
         group.add(topLight);
@@ -1536,17 +1522,18 @@ class CitySystem {
             const road = this.roads[Math.floor(Math.random() * this.roads.length)];
             const isH = Math.abs(road.dir.z) < 0.1;
             const speed = 2 + Math.random() * 3;
-            const lane = 0.5; // single lane, offset to the right always
+            const goesEndToStart = road.oneWay === 'end';
+            const lane = goesEndToStart ? -0.5 : 0.5;
 
-            // Pick random position along the road
-            const t = 0.1 + Math.random() * 0.8; // avoid extreme edges
+            const t = 0.1 + Math.random() * 0.8;
+            // Position on road centerline (always same regardless of direction)
             const rx = road.start.x + road.dir.x * road.length * t;
             const rz = road.start.z + road.dir.z * road.length * t;
             const rh = terrain.getHeight(rx, rz);
             if (rh < terrain.waterLevel + 0.3) continue;
 
             const vType = VEHICLE_TYPES[Math.floor(Math.random() * VEHICLE_TYPES.length)];
-            const vehicle = this.createVehicle(isH, 1, vType); // Always direction=1 (start->end)
+            const vehicle = this.createVehicle(isH, 1, vType);
 
             const px = isH ? rx : rx + lane;
             const pz = isH ? rz + lane : rz;
@@ -1554,22 +1541,18 @@ class CitySystem {
 
             vehicle.userData = {
                 isHorizontal: isH,
-                direction: 1,       // always start->end (one-way road)
                 speed,
                 currentSpeed: speed,
                 halfSize,
                 lane,
                 isBoat: false,
                 vehicleType: vType,
-                road: road,
-                progress: t,
-                reverse: false,
-                direction: 1,
+                road,
+                progress: goesEndToStart ? 1.0 - t : t,
+                reverse: goesEndToStart,
                 turning: false,
                 turnTimer: 0,
-                turnTargetIsH: false,
-                turnTargetRoad: 0,
-                turnTargetDir: 0,
+                stuckTimer: 0,
             };
 
             this.group.add(vehicle);
@@ -1692,7 +1675,6 @@ class CitySystem {
             }
         }
 
-        // Visible headlight glow meshes
         const headlightGeo = new THREE.SphereGeometry(0.07, 8, 6);
         const headlightMat = new THREE.MeshBasicMaterial({ color: 0xffffcc });
         const hlMesh1 = new THREE.Mesh(headlightGeo, headlightMat);
@@ -1702,7 +1684,6 @@ class CitySystem {
         hlMesh2.position.set(direction * 0.65, 0.25, -0.2);
         group.add(hlMesh2);
 
-        // Headlight SpotLight - narrow beam like real headlight
         const hlSpot = new THREE.SpotLight(0xffffcc, 0, 30, Math.PI / 7, 0.4, 1.8);
         const hlTarget = new THREE.Object3D();
         hlTarget.position.set(direction * 12, -0.8, 0);
@@ -1713,13 +1694,11 @@ class CitySystem {
         group.add(hlSpot);
         group.userData.headlight = hlSpot;
 
-        // Headlight PointLight for ambient fill
         const hlPoint = new THREE.PointLight(0xffffcc, 0, 12, 2);
         hlPoint.position.set(direction * 0.65, 0.25, 0);
         group.add(hlPoint);
         group.userData.headlightPoint = hlPoint;
 
-        // Tail lights
         const tailGeo = new THREE.SphereGeometry(0.05, 6, 4);
         const tailMat = new THREE.MeshBasicMaterial({
             color: 0xff0000, transparent: true, opacity: 0.9
@@ -1790,8 +1769,6 @@ class CitySystem {
 
     setLights(on) {
         this.lightsOn = on;
-        // Note: actual intensity is managed by updateTimeOfDay -> updateAllLights
-        // This just sets the flag
     }
 
     regenerateVehicles(terrain, vehicleCount) {
@@ -1836,24 +1813,39 @@ class CitySystem {
         return false;
     }
 
-    // Returns { road, reverse } — reverse=true means car enters at road's END and goes backwards
+    // =====================================================================
+    // FIX: 只允许从下一条路的 start 端进入（顺向衔接）
+    //      彻底消除环路上的双向对撞
+    //      仅在真正死路（无顺向出口）时才允许 reverse 掉头
+    // =====================================================================
+    // =========================================================================
+    // 严格单向拓扑：
+    //   road.oneWay='start' → 车必须从 r.start 进入，正向行驶
+    //   road.oneWay='end'   → 车必须从 r.end   进入，反向行驶
+    // =========================================================================
     findOutgoingRoad(currentRoad, endX, endZ) {
         const nodeEps = 2.5;
-        const candidates = [];
         const curIsH = Math.abs(currentRoad.dir.z) < 0.1;
+        const candidates = [];
 
         for (const r of this.roads) {
             if (r === currentRoad) continue;
-            const dStart = (r.start.x - endX)**2 + (r.start.z - endZ)**2;
-            const dEnd   = (r.end.x   - endX)**2 + (r.end.z   - endZ)**2;
-            const bestD = Math.min(dStart, dEnd);
-            if (bestD < nodeEps * nodeEps) {
-                candidates.push({ road: r, reverse: dEnd < dStart });
+
+            // oneWay='start'：只允许从 r.start 进（reverse=false）
+            // oneWay='end'  ：只允许从 r.end   进（reverse=true）
+            const entryX = r.oneWay === 'end' ? r.end.x   : r.start.x;
+            const entryZ = r.oneWay === 'end' ? r.end.z   : r.start.z;
+            const needsReverse = r.oneWay === 'end';
+
+            const d = (entryX - endX) ** 2 + (entryZ - endZ) ** 2;
+            if (d < nodeEps * nodeEps) {
+                candidates.push({ road: r, reverse: needsReverse });
             }
         }
 
         if (candidates.length === 0) return null;
 
+        // 优先选转弯（减少同一方向排队）
         const turning = candidates.filter(c => (Math.abs(c.road.dir.z) < 0.1) !== curIsH);
         const pool = turning.length > 0 ? turning : candidates;
         return pool[Math.floor(Math.random() * pool.length)];
@@ -1862,7 +1854,6 @@ class CitySystem {
     update(time, delta) {
         const dt = Math.min(delta || 0.016, 0.05);
 
-        // Update vehicles: each vehicle drives along its assigned road segment
         for (let i = 0; i < this.vehicles.length; i++) {
             const v = this.vehicles[i];
             const ud = v.userData;
@@ -1872,15 +1863,21 @@ class CitySystem {
                 continue;
             }
 
-            // Turning animation: smooth rotation when switching roads
+            // 转弯动画
             if (ud.turning) {
                 ud.turnTimer += dt;
                 const newRoad = ud.road;
                 const newIsH = newRoad ? Math.abs(newRoad.dir.z) < 0.1 : false;
-                const targetR = newIsH ? 0 : Math.PI/2;
+                // FIX: 转弯目标朝向需考虑 reverse 方向
+                let targetR;
+                if (newIsH) {
+                    targetR = ud.reverse ? Math.PI : 0;
+                } else {
+                    targetR = ud.reverse ? -Math.PI / 2 : Math.PI / 2;
+                }
                 let diff = targetR - v.rotation.y;
-                while (diff > Math.PI) diff -= Math.PI*2;
-                while (diff < -Math.PI) diff += Math.PI*2;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff < -Math.PI) diff += Math.PI * 2;
                 v.rotation.y += diff * Math.min(1, dt * 10);
                 if (ud.turnTimer >= 0.3) {
                     ud.turning = false;
@@ -1894,15 +1891,13 @@ class CitySystem {
             if (!road) continue;
             const isH = Math.abs(road.dir.z) < 0.1;
 
-            // === COLLISION: check ALL nearby vehicles (not just same road) ===
             let brakeDist = Infinity;
 
-            // Traffic light ahead
             const nextEndX = road.end.x, nextEndZ = road.end.z;
             const distToEnd = (1.0 - ud.progress) * road.length;
             for (const tl of this.trafficLights) {
                 const tlx = tl.group.position.x, tlz = tl.group.position.z;
-                const toL = Math.sqrt((tlx-v.position.x)**2 + (tlz-v.position.z)**2);
+                const toL = Math.sqrt((tlx - v.position.x) ** 2 + (tlz - v.position.z) ** 2);
                 if (toL < 8) {
                     const ph = (time + tl.phase) % 10;
                     const greenH = ph < 4.2;
@@ -1912,92 +1907,92 @@ class CitySystem {
                 }
             }
 
-            // Check ALL vehicles (same road + crossing roads)
             for (let j = 0; j < this.vehicles.length; j++) {
                 if (i === j) continue;
                 const o = this.vehicles[j];
                 if (o.userData.isBoat || o.userData.turning) continue;
                 const odx = o.position.x - v.position.x;
                 const odz = o.position.z - v.position.z;
-                const od = Math.sqrt(odx*odx + odz*odz);
-                if (od > 10) continue; // too far away
+                const od = Math.sqrt(odx * odx + odz * odz);
+                if (od > 10) continue;
 
                 if (o.userData.road === road) {
-                    // Same road: check ahead gap (handle reverse direction)
-                    let gap;
-                    if (ud.reverse) {
-                        gap = (ud.progress - o.userData.progress) * road.length;
-                    } else {
-                        gap = (o.userData.progress - ud.progress) * road.length;
+                    // 同路段：FIX - 只有同向车才让路（避免对向车互相刹车）
+                    if (o.userData.reverse === ud.reverse) {
+                        let gap;
+                        if (ud.reverse) {
+                            gap = (ud.progress - o.userData.progress) * road.length;
+                        } else {
+                            gap = (o.userData.progress - ud.progress) * road.length;
+                        }
+                        if (gap > 0 && gap < brakeDist) brakeDist = gap;
                     }
-                    if (gap > 0 && gap < brakeDist) brakeDist = gap;
+                    // 对向车：不刹车，由 findOutgoingRoad 的单向约束保证不会出现对向车
                 } else {
-                    // Different road: check if this vehicle is approaching our path
                     const oRoad = o.userData.road;
                     if (!oRoad) continue;
                     const oEndX = oRoad.end.x, oEndZ = oRoad.end.z;
-                    // Are we both approaching the same intersection?
                     const sameNode = (Math.abs(nextEndX - oEndX) < 1.5 && Math.abs(nextEndZ - oEndZ) < 1.5);
                     if (sameNode && distToEnd < 5) {
-                        // The car that's closest to the intersection has priority
                         const oDistToEnd = (1.0 - o.userData.progress) * oRoad.length;
                         if (oDistToEnd < distToEnd && od < brakeDist) brakeDist = od;
                     }
-                    // Simple proximity check: if very close, brake
                     if (od < 2.5 && od < brakeDist) brakeDist = od;
                 }
             }
 
-            // Speed control
             if (brakeDist < 1.5) ud.currentSpeed = 0;
-            else if (brakeDist < 6) ud.currentSpeed = Math.max(0.1, ud.speed * (brakeDist-1.5) / 4.5);
+            else if (brakeDist < 6) ud.currentSpeed = Math.max(0.1, ud.speed * (brakeDist - 1.5) / 4.5);
             else ud.currentSpeed += (ud.speed - ud.currentSpeed) * Math.min(1, dt * 4);
 
-            // === ANTI-GRIDLOCK: if stuck too long, force alternative route ===
+            // 反堵塞
             if (ud.currentSpeed < 0.05) {
                 ud.stuckTimer = (ud.stuckTimer || 0) + dt;
-                if (ud.stuckTimer > 3 && ud.progress > 0.3) {
-                    const res = this.findOutgoingRoad(road, v.position.x, v.position.z);
+                if (ud.stuckTimer > 3) {
+                    // 找到车前方最近的路口重定向
+                    const junctionX = ud.reverse ? road.start.x : road.end.x;
+                    const junctionZ = ud.reverse ? road.start.z : road.end.z;
+                    const res = this.findOutgoingRoad(road, junctionX, junctionZ);
                     if (res) {
                         ud.road = res.road;
                         ud.reverse = res.reverse;
-                        ud.progress = res.reverse ? 0.98 : 0.02;
                         ud.lane = res.reverse ? -0.5 : 0.5;
+                        ud.progress = res.reverse ? 0.98 : 0.02;
                         ud.stuckTimer = 0;
+                        ud.currentSpeed = ud.speed * 0.5;
                     }
                 }
             } else {
                 ud.stuckTimer = 0;
             }
 
-            // === MOVE ALONG ROAD ===
+            // 沿路段移动
             const move = ud.currentSpeed * dt * 2.5;
             const step = move / Math.max(road.length, 0.1);
             if (ud.reverse) {
                 ud.progress -= step;
-                if (ud.progress <= 0.0) { ud.progress = 0.0; ud.reverse = false; }
+                if (ud.progress <= 0.0) { ud.progress = 0.0; }
             } else {
                 ud.progress += step;
             }
 
-            // === ROAD END: switch to outgoing road ===
-            if (ud.progress >= 1.0) {
-                ud.progress = 1.0;
+            // =====================================================================
+            // FIX: 路段末尾切换——严格保持单向衔接，lane 随 reverse 同步更新
+            // =====================================================================
+            if (ud.progress >= 1.0 || (ud.reverse && ud.progress <= 0.0)) {
+                const atEnd = !ud.reverse; // true=到达end, false=到达start（逆向）
+                const junctionX = atEnd ? road.end.x : road.start.x;
+                const junctionZ = atEnd ? road.end.z : road.start.z;
 
-                const endX = road.end.x;
-                const endZ = road.end.z;
-
-                // Save world position BEFORE any switch
                 const savedX = v.position.x;
                 const savedZ = v.position.z;
 
-                // Check if another vehicle is occupying this intersection
                 let intersectionOccupied = false;
                 for (let j = 0; j < this.vehicles.length; j++) {
                     if (i === j) continue;
                     const o = this.vehicles[j];
                     if (o.userData.isBoat) continue;
-                    if ((o.position.x - endX)**2 + (o.position.z - endZ)**2 < 5.0) {
+                    if ((o.position.x - junctionX) ** 2 + (o.position.z - junctionZ) ** 2 < 5.0) {
                         intersectionOccupied = true;
                         break;
                     }
@@ -2005,37 +2000,45 @@ class CitySystem {
 
                 if (intersectionOccupied) {
                     ud.currentSpeed = 0;
+                    // 钉在路段末尾等待
+                    ud.progress = atEnd ? 0.99 : 0.01;
                 } else {
-                    const result = this.findOutgoingRoad(road, endX, endZ);
+                    const result = this.findOutgoingRoad(road, junctionX, junctionZ);
                     if (result) {
                         const nextRoad = result.road;
-                        const reverse = result.reverse;
+                        const reverse  = result.reverse;
                         const beforeIsH = Math.abs(road.dir.z) < 0.1;
-                        const afterIsH = Math.abs(nextRoad.dir.z) < 0.1;
-                        ud.road = nextRoad;
+                        const afterIsH  = Math.abs(nextRoad.dir.z) < 0.1;
+
+                        ud.road    = nextRoad;
                         ud.reverse = reverse;
-                        // Compute progress from SAVED world position
+                        // FIX: lane 与 reverse 保持一致
+                        ud.lane    = reverse ? -0.5 : 0.5;
+
+                        // 在新路段上计算初始 progress
+                        // progress 始终 = 距离 start 的比例 (0=start, 1=end)
+                        // reverse=true 时车从 end 进，progress 自然 ≈ 1.0，后续递减
                         if (afterIsH) {
                             ud.progress = (savedX - nextRoad.start.x) / Math.max(nextRoad.length, 0.1);
                         } else {
                             ud.progress = (savedZ - nextRoad.start.z) / Math.max(nextRoad.length, 0.1);
                         }
-                        if (reverse) {
-                            ud.progress = 1.0 - ud.progress;
-                        }
                         ud.progress = Math.max(0.01, Math.min(0.99, ud.progress));
-                        ud.lane = reverse ? -0.5 : 0.5;
-                        ud.turning = beforeIsH !== afterIsH;
+
+                        ud.turning   = beforeIsH !== afterIsH;
                         ud.turnTimer = 0;
                         ud.stuckTimer = 0;
                     } else {
-                        ud.progress = 0.02;
+                        // 真正死路：重置到路段起点
+                        ud.progress  = 0.02;
+                        ud.reverse   = false;
+                        ud.lane      = 0.5;
                         ud.stuckTimer = 0;
                     }
                 }
             }
 
-            // Position from current road segment (same world position, no jump)
+            // 根据当前路段更新世界坐标
             const curRoad = ud.road || road;
             const curIsH = Math.abs(curRoad.dir.z) < 0.1;
             const cpx = curRoad.start.x + curRoad.dir.x * curRoad.length * ud.progress;
@@ -2043,12 +2046,16 @@ class CitySystem {
             v.position.x = curIsH ? cpx : cpx + ud.lane;
             v.position.z = curIsH ? cpz + ud.lane : cpz;
             v.position.y = (this.terrain ? this.terrain.getHeight(v.position.x, v.position.z) + 0.3 : v.position.y);
-            v.rotation.y = curIsH
-                ? (ud.reverse ? Math.PI : 0)
-                : (ud.reverse ? -Math.PI/2 : Math.PI/2);
+
+            // FIX: 朝向根据 reverse 和路向两维确定
+            if (curIsH) {
+                v.rotation.y = ud.reverse ? Math.PI : 0;
+            } else {
+                v.rotation.y = ud.reverse ? -Math.PI / 2 : Math.PI / 2;
+            }
         }
 
-        // === EMERGENCY COLLISION PUSH (all vehicles, all roads) ===
+        // 紧急推开（防重叠）
         for (let i = 0; i < this.vehicles.length; i++) {
             for (let j = i + 1; j < this.vehicles.length; j++) {
                 const a = this.vehicles[i], b = this.vehicles[j];
@@ -2066,17 +2073,17 @@ class CitySystem {
             }
         }
 
-        // Traffic light cycling
+        // 交通灯循环
         const cycleTime = 10;
         for (const tl of this.trafficLights) {
             const phase = (time + tl.phase) % cycleTime;
             let activeIndex;
             if (phase < cycleTime * 0.42) {
-                activeIndex = 2; // Green
+                activeIndex = 2;
             } else if (phase < cycleTime * 0.5) {
-                activeIndex = 1; // Yellow
+                activeIndex = 1;
             } else {
-                activeIndex = 0; // Red
+                activeIndex = 0;
             }
             for (let i = 0; i < tl.bulbs.length; i++) {
                 const isActive = i === activeIndex;
@@ -2089,7 +2096,7 @@ class CitySystem {
             tl.pointLight.intensity = 1.5;
         }
 
-        // Lighthouse sweeping beam - dramatic rotation
+        // 灯塔扫描光束
         for (const bld of this.cityBuildings) {
             if (bld.userData.beamLight && bld.userData.beamTarget) {
                 const beamAngle = time * 0.7;
@@ -2099,15 +2106,12 @@ class CitySystem {
                     -5 + Math.sin(time * 0.3) * 1,
                     Math.sin(beamAngle) * beamRadius
                 );
-                // Pulsing intensity for realistic lighthouse effect
                 const pulse = 8 + Math.sin(time * 1.8) * 2 + Math.sin(time * 3.7) * 1;
                 bld.userData.beamLight.intensity = Math.max(5, pulse);
             }
-            // Lantern glow flicker
             if (bld.userData.lanternGlow) {
                 bld.userData.lanternGlow.intensity = 2.5 + Math.sin(time * 1.5) * 0.5 + Math.sin(time * 2.7) * 0.3;
             }
-            // Top beacon blink
             if (bld.userData.topLight && bld.userData.topBulb) {
                 const blinkPhase = time * 3;
                 const blink = Math.sin(blinkPhase) > 0.3;
@@ -2126,12 +2130,9 @@ class CitySystem {
             this.snowAccum = Math.max(0.0, (this.snowAccum || 0) - deltaTime * 0.08);
         }
 
-        // Add snow on building rooftops - find actual highest points
         for (const bld of this.cityBuildings) {
             if (!bld.userData.snowData && this.snowAccum > 0.1) {
-                // Find the actual highest mesh in the building
                 let topY = -Infinity;
-                let topMesh = null;
                 bld.traverse(child => {
                     if (child.isMesh && child.geometry) {
                         const worldPos = new THREE.Vector3();
@@ -2145,7 +2146,6 @@ class CitySystem {
                             if (geoParams.radiusTop) meshTop += Math.max(geoParams.radiusTop, 0);
                             if (meshTop > topY) {
                                 topY = meshTop;
-                                topMesh = child;
                             }
                         }
                     }
@@ -2220,7 +2220,6 @@ class CitySystem {
             }
         }
     }
-
 
     clear() {
         this.group.traverse((child) => {
