@@ -337,48 +337,40 @@ class PCGWorld {
 
         if (this.state.lightsOn) {
             const b = Math.max(0.3, nightBoost);
-            if (this.houses) {
+            if (this.houses && this.houses.houses) {
                 for (const h of this.houses.houses) {
-                    if (h.userData.interiorLight) h.userData.interiorLight.intensity = b * 15;
-                    if (h.userData.windowMeshes)
+                    if (h.userData && h.userData.interiorLight) h.userData.interiorLight.intensity = b * 15;
+                    if (h.userData && h.userData.windowMeshes)
                         for (const w of h.userData.windowMeshes) w.material.emissiveIntensity = b;
                 }
             }
             if (this.city) {
-                for (const bld of this.city.cityBuildings) {
-                    if (bld.userData.interiorLight) bld.userData.interiorLight.intensity = b * 15;
-                    if (bld.userData.topLight) bld.userData.topLight.intensity = b * 5;
-                    if (bld.userData.beamLight) bld.userData.beamLight.intensity = b * 12;
-                    if (bld.userData.lanternGlow) bld.userData.lanternGlow.intensity = b * 3;
-                    if (bld.userData.windowMeshes)
+                if (this.city.cityBuildings) for (const bld of this.city.cityBuildings) {
+                    if (bld.userData && bld.userData.interiorLight) bld.userData.interiorLight.intensity = b * 15;
+                    if (bld.userData && bld.userData.topLight) bld.userData.topLight.intensity = b * 5;
+                    if (bld.userData && bld.userData.beamLight) bld.userData.beamLight.intensity = b * 12;
+                    if (bld.userData && bld.userData.lanternGlow) bld.userData.lanternGlow.intensity = b * 3;
+                    if (bld.userData && bld.userData.windowMeshes)
                         for (const w of bld.userData.windowMeshes) w.material.emissiveIntensity = b;
                 }
-                this.city.setLights(true); // handles streetLightGroups internally
-                if (this.city.streetLightLamps) for (const sl of this.city.streetLightLamps) {
-                    if (sl.spotLight) sl.spotLight.intensity = b * 20;
-                    if (sl.pointLight) sl.pointLight.intensity = b * 12;
-                    if (sl.lampMat) { sl.lampMat.opacity = 0.95; sl.lampMat.color.set(0xffffdd); if (sl.lampMat.emissive) sl.lampMat.emissiveIntensity = b * 3; }
-                    if (sl.glowMat) sl.glowMat.opacity = b * 0.8;
-                }
+                if (this.city.setLights) this.city.setLights(true);
             }
         } else {
-            if (this.houses) for (const h of this.houses.houses) {
-                if (h.userData.interiorLight) h.userData.interiorLight.intensity = 0;
-                if (h.userData.windowMeshes) for (const w of h.userData.windowMeshes) w.material.emissiveIntensity = 0;
+            if (this.houses && this.houses.houses) {
+                for (const h of this.houses.houses) {
+                    if (h.userData && h.userData.interiorLight) h.userData.interiorLight.intensity = 0;
+                    if (h.userData && h.userData.windowMeshes)
+                        for (const w of h.userData.windowMeshes) w.material.emissiveIntensity = 0;
+                }
             }
             if (this.city) {
-                for (const bld of this.city.cityBuildings) {
-                    if (bld.userData.interiorLight) bld.userData.interiorLight.intensity = 0;
-                    if (bld.userData.topLight) bld.userData.topLight.intensity = 0;
-                    if (bld.userData.windowMeshes) for (const w of bld.userData.windowMeshes) w.material.emissiveIntensity = 0;
+                if (this.city.cityBuildings) for (const bld of this.city.cityBuildings) {
+                    if (bld.userData && bld.userData.interiorLight) bld.userData.interiorLight.intensity = 0;
+                    if (bld.userData && bld.userData.topLight) bld.userData.topLight.intensity = 0;
+                    if (bld.userData && bld.userData.windowMeshes)
+                        for (const w of bld.userData.windowMeshes) w.material.emissiveIntensity = 0;
                 }
-                this.city.setLights(false); // handles streetLightGroups internally
-                if (this.city.streetLightLamps) for (const sl of this.city.streetLightLamps) {
-                    if (sl.spotLight) sl.spotLight.intensity = 0;
-                    if (sl.pointLight) sl.pointLight.intensity = 0;
-                    if (sl.lampMat) { sl.lampMat.opacity = 0.25; sl.lampMat.color.set(0x666666); sl.lampMat.emissiveIntensity = 0; }
-                    if (sl.glowMat) sl.glowMat.opacity = 0;
-                }
+                if (this.city.setLights) this.city.setLights(false);
             }
         }
     }
@@ -418,11 +410,17 @@ class PCGWorld {
         this.city = new CitySystem(this.scene, new SimplexNoise(this.state.seed));
 
         if (this.needsCitySystem()) {
-            this.city.generate(this.terrain, this.state.seed, this.state.vehicleCount, {
-                buildingDensity: this.state.houseCount,
-                roadDensity: this.state.roadDensity,
-                lightSpacing: this.state.lightSpacing
-            });
+            document.getElementById('info').textContent += ' | Generating city...';
+            try {
+                this.city.generate(this.terrain, this.state.seed, this.state.vehicleCount, {
+                    buildingDensity: this.state.houseCount,
+                    roadDensity: this.state.roadDensity,
+                    lightSpacing: this.state.lightSpacing
+                });
+                document.getElementById('info').textContent += ' DONE: ' + this.city.cityBuildings.length + ' blds';
+            } catch(e) {
+                document.getElementById('info').textContent += ' ERROR: ' + e.message;
+            }
             if (this.state.lightsOn) {
                 this.city.setLights(true);
             }
