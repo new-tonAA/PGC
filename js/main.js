@@ -626,10 +626,20 @@ class PCGWorld {
     }
 
     scheduleRegen() {
-        if (this._regenTimer) clearTimeout(this._regenTimer);
-        this._regenTimer = setTimeout(() => {
-            this.generateWorld();
-        }, 150);
+        if (this._regenScheduled) return;
+        this._regenScheduled = true;
+        requestAnimationFrame(() => {
+            this._regenScheduled = false;
+            try {
+                if (this.city) { this.city.clear(); this.city = null; }
+                if (this.houses) { this.houses.clear(); this.houses = null; }
+                this.generateWorld();
+            } catch (e) {
+                console.error('Regen failed:', e);
+                const loading = document.getElementById('loading');
+                if (loading) { loading.innerHTML = '<div style=\"color:#f44\">Regen error: ' + e.message + '</div>'; loading.style.opacity = '1'; loading.style.display = 'flex'; }
+            }
+        });
     }
 
     setupUI() {
