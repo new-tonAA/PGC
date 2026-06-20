@@ -227,12 +227,10 @@ class ProceduralTerrain {
         if (this.mesh) {
             this.scene.remove(this.mesh);
             this.mesh.geometry.dispose();
-            this.mesh.material.dispose();
         }
         if (this.waterMesh) {
             this.scene.remove(this.waterMesh);
             this.waterMesh.geometry.dispose();
-            this.waterMesh.material.dispose();
         }
 
         // Set water levels per terrain type

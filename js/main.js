@@ -408,15 +408,11 @@ class PCGWorld {
             if (this.terrain.mesh) {
                 this.scene.remove(this.terrain.mesh);
                 this.terrain.mesh.geometry.dispose();
-                this.terrain.mesh.material.dispose();
             }
             if (this.terrain.waterMesh) {
                 this.scene.remove(this.terrain.waterMesh);
                 this.terrain.waterMesh.geometry.dispose();
-                this.terrain.waterMesh.material.dispose();
             }
-            this.terrain.mesh = null;
-            this.terrain.waterMesh = null;
         }
         if (this.fire)     { this.fire.clear();     this.fire = null; }
         if (this.city)     { this.city.clear();      this.city = null; }
@@ -638,13 +634,10 @@ class PCGWorld {
     scheduleRegen() {
         if (this._regenScheduled) return;
         this._regenScheduled = true;
-        // Force a render flush first so GPU releases old objects
-        this.renderer.render(this.scene, this.camera);
-        // Then rebuild on next microtask
         setTimeout(() => {
             this._regenScheduled = false;
             this.generateWorld();
-        }, 0);
+        }, 80);
     }
 
     setupUI() {
