@@ -1074,7 +1074,7 @@ class CitySystem {
     }
 
     // ==========================================
-    // UPDATE - vehicles follow traffic lights, can turn
+    // UPDATE (vehicles + traffic lights + lighthouse)
     // ==========================================
     update(time) {
         const redForHorizontal = [];
@@ -1266,6 +1266,8 @@ class CitySystem {
         this.cityBuildings = [];
         this.lightsOn = false;
     }
+
+    updateSnowAccum(s, dt) { /* snow handled by terrain/house/vegetation shaders */ }
 }
 
 export { CitySystem };
