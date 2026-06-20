@@ -353,44 +353,31 @@ class PCGWorld {
                     if (bld.userData.windowMeshes)
                         for (const w of bld.userData.windowMeshes) w.material.emissiveIntensity = b;
                 }
-                for (const sl of this.city.streetLightLamps) {
+                this.city.setLights(true); // handles streetLightGroups internally
+                if (this.city.streetLightLamps) for (const sl of this.city.streetLightLamps) {
                     if (sl.spotLight) sl.spotLight.intensity = b * 20;
                     if (sl.pointLight) sl.pointLight.intensity = b * 12;
-                    if (sl.lampMat) {
-                        sl.lampMat.opacity = 0.95;
-                        sl.lampMat.color.set(0xffffdd);
-                        if (sl.lampMat.emissive) sl.lampMat.emissiveIntensity = b * 3;
-                    }
+                    if (sl.lampMat) { sl.lampMat.opacity = 0.95; sl.lampMat.color.set(0xffffdd); if (sl.lampMat.emissive) sl.lampMat.emissiveIntensity = b * 3; }
                     if (sl.glowMat) sl.glowMat.opacity = b * 0.8;
-                    if (sl.coneMat) sl.coneMat.opacity = b * 0.2;
-                }
-                for (const v of this.city.vehicles) {
-                    if (v.userData.headlight) v.userData.headlight.intensity = b * 15;
-                    if (v.userData.headlightPoint) v.userData.headlightPoint.intensity = b * 6;
-                    if (v.userData.tailLightMat) v.userData.tailLightMat.emissiveIntensity = b;
                 }
             }
         } else {
-            if (this.houses) {
-                for (const h of this.houses.houses) {
-                    if (h.userData.interiorLight) h.userData.interiorLight.intensity = 0;
-                    if (h.userData.windowMeshes)
-                        for (const w of h.userData.windowMeshes) w.material.emissiveIntensity = 0;
-                }
+            if (this.houses) for (const h of this.houses.houses) {
+                if (h.userData.interiorLight) h.userData.interiorLight.intensity = 0;
+                if (h.userData.windowMeshes) for (const w of h.userData.windowMeshes) w.material.emissiveIntensity = 0;
             }
             if (this.city) {
                 for (const bld of this.city.cityBuildings) {
                     if (bld.userData.interiorLight) bld.userData.interiorLight.intensity = 0;
                     if (bld.userData.topLight) bld.userData.topLight.intensity = 0;
-                    if (bld.userData.windowMeshes)
-                        for (const w of bld.userData.windowMeshes) w.material.emissiveIntensity = 0;
+                    if (bld.userData.windowMeshes) for (const w of bld.userData.windowMeshes) w.material.emissiveIntensity = 0;
                 }
-                for (const sl of this.city.streetLightLamps) {
+                this.city.setLights(false); // handles streetLightGroups internally
+                if (this.city.streetLightLamps) for (const sl of this.city.streetLightLamps) {
                     if (sl.spotLight) sl.spotLight.intensity = 0;
                     if (sl.pointLight) sl.pointLight.intensity = 0;
                     if (sl.lampMat) { sl.lampMat.opacity = 0.25; sl.lampMat.color.set(0x666666); sl.lampMat.emissiveIntensity = 0; }
                     if (sl.glowMat) sl.glowMat.opacity = 0;
-                    if (sl.coneMat) sl.coneMat.opacity = 0;
                 }
             }
         }
