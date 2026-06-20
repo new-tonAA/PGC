@@ -240,6 +240,15 @@ class CitySystem {
             }
         }
 
+        // Canton Tower landmark at grid center
+        if (primaryPos.length >= 2) {
+            const ci = Math.floor(primaryPos.length / 2);
+            const ctx = primaryPos[ci] + 4;
+            const ctz = primaryPos[ci] + 4;
+            const cth = terrain.getHeight(ctx, ctz);
+            if (cth >= wl + 0.3) this.createCantonTower(ctx, cth, ctz, terrain);
+        }
+
         // Street lights along primary roads
         for (const pos of primaryPos) {
             const pw = roadInfo.get(pos).width;
@@ -1074,6 +1083,58 @@ class CitySystem {
     }
 
     // ==========================================
+    // CANTON TOWER - Guangzhou landmark
+    // ==========================================
+    createCantonTower(x, baseH, z, terrain) {
+        const group = new THREE.Group();
+        const totalH = 22;
+        const baseR = 2.0;
+        const midR = 0.8;
+        const topR = 1.2;
+        const segs = 20;
+        for (let i = 0; i < segs; i++) {
+            const t0 = i / segs, t1 = (i + 1) / segs;
+            const y0 = t0 * totalH, y1 = t1 * totalH;
+            let r0, r1;
+            if (t0 < 0.5) { const s = t0 * 2; r0 = baseR * (1 - s) + midR * s; }
+            else { const s = (t0 - 0.5) * 2; r0 = midR * (1 - s) + topR * s; }
+            if (t1 < 0.5) { const s = t1 * 2; r1 = baseR * (1 - s) + midR * s; }
+            else { const s = (t1 - 0.5) * 2; r1 = midR * (1 - s) + topR * s; }
+            const s = new THREE.Mesh(
+                new THREE.CylinderGeometry(r1, r0, (y1 - y0), 8),
+                new THREE.MeshPhongMaterial({ color: new THREE.Color(0.75, 0.7, 0.65), shininess: 80, transparent: true, opacity: 0.9 })
+            );
+            s.position.y = (y0 + y1) / 2; s.castShadow = true; group.add(s);
+        }
+        const antH = 5;
+        const a = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.15, antH, 6), new THREE.MeshPhongMaterial({ color: 0xaaaaaa, shininess: 100 }));
+        a.position.y = totalH + antH / 2; group.add(a);
+        const d = new THREE.Mesh(new THREE.TorusGeometry(topR + 0.3, 0.15, 8, 16),
+            new THREE.MeshPhongMaterial({ color: 0xdddddd, emissive: 0xffcc88, emissiveIntensity: 0.3 }));
+        d.position.y = totalH * 0.72; d.rotation.x = Math.PI / 2; group.add(d);
+        const wm = [];
+        for (let i = 0; i < 12; i++) {
+            const ang = (i / 12) * Math.PI * 2;
+            for (let row = 0; row < 8; row++) {
+                const wy = 2 + row * 2.5, wt = wy / totalH;
+                let wr;
+                if (wt < 0.5) { const s = wt * 2; wr = baseR * (1 - s) + midR * s; }
+                else { const s = (wt - 0.5) * 2; wr = midR * (1 - s) + topR * s; }
+                const w = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.6),
+                    new THREE.MeshPhongMaterial({ color: 0xaaddff, emissive: 0xffdd88, emissiveIntensity: 0.0, transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
+                w.position.set(Math.cos(ang) * (wr + 0.02), wy, Math.sin(ang) * (wr + 0.02));
+                w.rotation.y = -ang; group.add(w); wm.push(w);
+            }
+        }
+        group.userData.windowMeshes = wm;
+        const tl = new THREE.PointLight(0xffcc66, 0, 55, 2); tl.position.set(0, totalH * 0.7, 0); group.add(tl); group.userData.interiorLight = tl;
+        const rl = new THREE.PointLight(0xff4444, 0, 30, 2); rl.position.set(0, totalH + antH, 0); group.add(rl); group.userData.topLight = rl;
+        const b = new THREE.Mesh(new THREE.SphereGeometry(0.12, 6, 4), new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 }));
+        b.position.y = totalH + antH; group.add(b); group.userData.topBulb = b;
+        group.position.set(x, baseH, z); this.group.add(group); this.cityBuildings.push(group);
+    }
+
+    // ==========================================
     // UPDATE - vehicles follow traffic lights, can turn
     // ==========================================
     update(time) {
@@ -1198,8 +1259,12 @@ class CitySystem {
             }
         }
 
-        // Lighthouse beam
+        // Canton Tower beacon blink + Lighthouse beam
         for (const bld of this.cityBuildings) {
+            if (bld.userData.topBulb) {
+                const on = Math.sin(time * 2.5) > 0.3;
+                bld.userData.topBulb.material.opacity = on ? 0.9 : 0.15;
+            }
             if (bld.userData.beamLight) {
                 bld.userData.beamLight.target.position.x = Math.cos(time * 0.5) * 30;
                 bld.userData.beamLight.target.position.z = Math.sin(time * 0.5) * 30;
