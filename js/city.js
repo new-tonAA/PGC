@@ -1878,7 +1878,7 @@ class CitySystem {
             // 转弯动画：沿二次贝塞尔弧线行驶，朝向跟随曲线切线
             if (ud.turning) {
                 ud.turnTimer += dt;
-                const rawT = Math.min(1, ud.turnTimer / 0.5);
+                const rawT = Math.min(1, ud.turnTimer / 0.8);
                 const s = rawT * rawT * (3 - 2 * rawT); // smoothstep
 
                 // 二次贝塞尔
@@ -2046,7 +2046,7 @@ class CitySystem {
                         }
                         ud.progress = Math.max(0.01, Math.min(0.99, ud.progress));
 
-                        // 转弯弧线：控制点 = 路口外角（几何交叉点）
+                        // 转弯弧线：大半径外角转弯
                         if (beforeIsH !== afterIsH) {
                             ud.turning    = true;
                             ud.turnTimer  = 0;
@@ -2058,14 +2058,15 @@ class CitySystem {
                             const npz = nextRoad.start.z + nextRoad.dir.z * nextRoad.length * ud.progress;
                             ud.turnEndX = afterIsH ? npx : npx + ud.lane;
                             ud.turnEndZ = afterIsH ? npz + ud.lane : npz;
-                            // 控制点：旧路末端按新路方向偏移 lane，形成平滑弧线
-                            // 旧路 lane 方向 ⊥ 旧路 dir，新路 lane 方向 ⊥ 新路 dir
-                            const oldLaneDir = beforeIsH ? {x:0, z:(savedZ > junctionZ ? 1 : -1)}
-                                                          : {x:(savedX > junctionX ? 1 : -1), z:0};
-                            const R = 1.0;
-                            ud.turnMidX = junctionX + oldLaneDir.x * R + (afterIsH ? 0 : ud.lane * 1.5);
-                            ud.turnMidZ = junctionZ + oldLaneDir.z * R + (afterIsH ? ud.lane * 1.5 : 0);
-                            ud.turnTargetR = 0; // unused, rotation now follows curve tangent
+                            // 控制点 = 路口外角（新旧路垂直方向各偏移 2.5m）
+                            const R = 2.5;  // wide turn radius for all vehicles
+                            let mx = junctionX, mz = junctionZ;
+                            if (beforeIsH) { mz += (savedZ > junctionZ ? 1 : -1) * R; }
+                            else           { mx += (savedX > junctionX ? 1 : -1) * R; }
+                            if (afterIsH)  { mz += (ud.lane > 0 ? 1 : -1) * R; }
+                            else           { mx += (ud.lane > 0 ? 1 : -1) * R; }
+                            ud.turnMidX = mx;
+                            ud.turnMidZ = mz;
                         } else {
                             ud.turning = false;
                         }
