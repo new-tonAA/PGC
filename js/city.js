@@ -240,7 +240,7 @@ class CitySystem {
             for (const road of this.roads) {
                 const rLen = road.length;
                 // Walk along the road, check if building overlaps the road band
-                const chkSteps = Math.ceil(rLen / 1.0);
+                const chkSteps = Math.ceil(rLen / 0.4);
                 for (let s = 0; s <= chkSteps; s++) {
                     const t = s / chkSteps;
                     const rx = road.start.x + road.dir.x * rLen * t;
@@ -499,7 +499,7 @@ class CitySystem {
         const length = dir.length();
         dir.normalize();
 
-        const segments = Math.max(2, Math.ceil(length / 4));
+        const segments = Math.max(1, Math.ceil(length / 8));
         const segLen = length / segments;
 
         for (let s = 0; s < segments; s++) {
@@ -922,6 +922,7 @@ class CitySystem {
         return group;
     }
 
+    // --- generateBlock (unused now, kept for reference) ---
     generateBlock(x1, z1, x2, z2, baseH, heightFactor, terrain) {
         const blockW = x2 - x1;
         const blockD = z2 - z1;
@@ -1907,10 +1908,7 @@ class CitySystem {
 
         if (pool.length === 0) return null;
 
-        // 优先转弯
-        const turning = pool.filter(c => (Math.abs(c.road.dir.z) < 0.1) !== curIsH);
-        if (turning.length > 0) pool = turning;
-
+        // Pick randomly from all legal exits (straight + turns equally likely)
         return pool[Math.floor(Math.random() * pool.length)];
     }
 
