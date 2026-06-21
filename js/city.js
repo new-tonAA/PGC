@@ -266,22 +266,26 @@ class CitySystem {
                 const distFromCenter = Math.sqrt(ox * ox + oz * oz);
                 const heightFactor = Math.max(0.25, 1.0 - distFromCenter / (terrain.size * 0.45));
 
-                // Random building size, constrained aspect ratio (0.5 ~ 2.0)
-                const bw = 0.6 + Math.random() * 3.4;
-                const bdLimit = Math.max(0.6, bw * 0.5);
-                const bdHigh = Math.min(4.0, bw * 2.0);
-                const bd = bdLimit + Math.random() * Math.max(0.01, bdHigh - bdLimit);
-
-                // Skip if on road
-                if (isOnRoad(ox, oz, bw, bd)) continue;
-
-                // Check against already-placed slots
-                let blocked = false;
-                for (const s of this.buildingSlots) {
-                    if (Math.abs(s.bx - ox) < (s.bw + bw) / 2 + 0.4 &&
-                        Math.abs(s.bz - oz) < (s.bd + bd) / 2 + 0.4) { blocked = true; break; }
+                // Random building size with fallback — try progressively smaller sizes
+                // if the initial size conflicts with roads or other buildings
+                let bw, bd, blockedByRoad;
+                const sizeOptions = [3.5, 2.5, 1.8, 1.2, 0.8, 0.6];
+                let foundSize = false;
+                for (const sz of sizeOptions) {
+                    bw = sz + Math.random() * 0.4;
+                    const bdLimit = Math.max(0.6, bw * 0.5);
+                    const bdHigh = Math.min(4.0, bw * 2.0);
+                    bd = bdLimit + Math.random() * Math.max(0.01, bdHigh - bdLimit);
+                    if (isOnRoad(ox, oz, bw, bd)) continue;
+                    // Check against already-placed slots
+                    let blocked = false;
+                    for (const s of this.buildingSlots) {
+                        if (Math.abs(s.bx - ox) < (s.bw + bw) / 2 + 0.4 &&
+                            Math.abs(s.bz - oz) < (s.bd + bd) / 2 + 0.4) { blocked = true; break; }
+                    }
+                    if (!blocked) { foundSize = true; break; }
                 }
-                if (blocked) continue;
+                if (!foundSize) continue;
 
                 const hNoise = this.noise.noise2D(ox * 0.15, oz * 0.15);
                 // Height: min 2m, max 20m (below Canton Tower's 22m)
