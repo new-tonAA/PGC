@@ -231,25 +231,36 @@ class CitySystem {
         this.buildingSlots = [];
         const scanMin = -terrain.size * 0.35;
         const scanMax = terrain.size * 0.35;
-        const scanStep = 1.5; // coarse grid, random offset within each cell
+        const scanStep = 1.5;
 
-        // --- Slot generation helpers ---
+        // Compute planned landmark positions FIRST (before slot scan)
+        // so we can exclude them from building placement
+        const landmarkFootprints = [];
+        if (this.intersections.length > 0) {
+            const { landmarkFootprints: lf } = this.computeLandmarkPositions(terrain, roadPositionsX, roadPositionsZ);
+            landmarkFootprints.push(...lf);
+        }
+
+        // --- isOnRoad helper ---
         const isOnRoad = (bx, bz, bw, bd) => {
             const minX = bx - bw / 2, maxX = bx + bw / 2;
             const minZ = bz - bd / 2, maxZ = bz + bd / 2;
             for (const road of this.roads) {
                 const rLen = road.length;
-                // Walk along the road, check if building overlaps the road band
                 const chkSteps = Math.ceil(rLen / 0.4);
                 for (let s = 0; s <= chkSteps; s++) {
                     const t = s / chkSteps;
                     const rx = road.start.x + road.dir.x * rLen * t;
                     const rz = road.start.z + road.dir.z * rLen * t;
-                    // Road band: ±(road.width/2 + 1.2) from centerline
                     const half = road.width / 2 + 1.2;
                     if (maxX > rx - half && minX < rx + half &&
                         maxZ > rz - half && minZ < rz + half) return true;
                 }
+            }
+            // Also check landmark footprints
+            for (const fp of landmarkFootprints) {
+                const ox = Math.abs(fp.x - bx), oz = Math.abs(fp.z - bz);
+                if (ox < (fp.w + bw) / 2 + 1.5 && oz < (fp.d + bd) / 2 + 1.5) return true;
             }
             return false;
         };
@@ -304,14 +315,15 @@ class CitySystem {
             [this.buildingSlots[k], this.buildingSlots[r]] = [this.buildingSlots[r], this.buildingSlots[k]];
         }
 
-        // --- Phase 2: activate first targetBuildings slots ---
+        // --- Phase 2: create landmarks ---
+        if (this.intersections.length > 0) {
+            this.createLandmarkBuildings(terrain, roadPositionsX, roadPositionsZ);
+        }
+
+        // --- Phase 3: activate target building count from slots ---
         const numToBuild = Math.min(targetBuildings, this.buildingSlots.length);
         for (let n = 0; n < numToBuild; n++) {
             this.buildSlot(this.buildingSlots[n]);
-        }
-
-        if (this.intersections.length > 0) {
-            this.createLandmarkBuildings(terrain, roadPositionsX, roadPositionsZ);
         }
 
         const spacing = this.lightSpacing;
@@ -721,21 +733,76 @@ class CitySystem {
         const ch = terrain.getHeight(cx, cz);
 
         if (ch >= terrain.waterLevel + 0.3) {
-            this.createCantonTower(cx + 4, ch, cz + 4, terrain);
+            const spot = this.findClearSpot(cx + 4, cz + 4, 2.5, terrain);
+            if (spot) {
+                this.createCantonTower(spot.x, terrain.getHeight(spot.x, spot.z), spot.z, terrain);
+            }
         }
 
         if (roadPositionsX.length > 2 && roadPositionsZ.length > 2) {
-            // Place mall BETWEEN intersections (half a grid step offset), not ON one
             const gridSpacing = roadPositionsX.length > 1
                 ? (roadPositionsX[roadPositionsX.length-1] - roadPositionsX[0]) / (roadPositionsX.length - 1)
                 : 10;
-            const mx = cx + gridSpacing * 0.5;
-            const mz = cz + gridSpacing * 0.5;
-            const mh = terrain.getHeight(mx, mz);
-            if (mh >= terrain.waterLevel + 0.3) {
-                this.createShoppingMall(mx, mh, mz, terrain);
+            const spot = this.findClearSpot(cx + gridSpacing * 0.5, cz + gridSpacing * 0.5, 1.5, terrain);
+            if (spot) {
+                this.createShoppingMall(spot.x, terrain.getHeight(spot.x, spot.z), spot.z, terrain);
             }
         }
+    }
+
+    computeLandmarkPositions(terrain, roadPositionsX, roadPositionsZ) {
+        const landmarkFootprints = [];
+        if (roadPositionsX.length < 2 || roadPositionsZ.length < 2)
+            return { landmarkFootprints };
+
+        const centerIdxX = Math.floor(roadPositionsX.length / 2);
+        const centerIdxZ = Math.floor(roadPositionsZ.length / 2);
+        const cx = roadPositionsX[centerIdxX];
+        const cz = roadPositionsZ[centerIdxZ];
+        const ch = terrain.getHeight(cx, cz);
+
+        if (ch >= terrain.waterLevel + 0.3) {
+            const spot = this.findClearSpot(cx + 4, cz + 4, 2.5, terrain);
+            if (spot) landmarkFootprints.push({ x: spot.x, z: spot.z, w: 5, d: 5 });
+        }
+
+        if (roadPositionsX.length > 2 && roadPositionsZ.length > 2) {
+            const gridSpacing = roadPositionsX.length > 1
+                ? (roadPositionsX[roadPositionsX.length-1] - roadPositionsX[0]) / (roadPositionsX.length - 1)
+                : 10;
+            const spot = this.findClearSpot(cx + gridSpacing * 0.5, cz + gridSpacing * 0.5, 1.5, terrain);
+            if (spot) landmarkFootprints.push({ x: spot.x, z: spot.z, w: 3, d: 2.5 });
+        }
+
+        return { landmarkFootprints };
+    }
+
+    findClearSpot(sx, sz, size, terrain) {
+        // Check if current position is clear of all roads
+        const checkClear = (x, z) => {
+            if (terrain.getHeight(x, z) < terrain.waterLevel + 0.3) return false;
+            for (const road of this.roads) {
+                const dx = x - road.start.x, dz = z - road.start.z;
+                const t = Math.max(0, Math.min(1,
+                    (dx * road.dir.x + dz * road.dir.z) / Math.max(0.01, road.length)));
+                const cx = road.start.x + road.dir.x * road.length * t;
+                const cz = road.start.z + road.dir.z * road.length * t;
+                const half = road.width / 2 + size + 0.5;
+                if (Math.abs(x - cx) < half && Math.abs(z - cz) < half) return false;
+            }
+            return true;
+        };
+
+        if (checkClear(sx, sz)) return { x: sx, z: sz };
+
+        // Radial search outward up to 12m
+        for (let r = 1; r <= 12; r++) {
+            for (let a = 0; a < Math.PI * 2; a += 0.4) {
+                const tx = sx + Math.cos(a) * r, tz = sz + Math.sin(a) * r;
+                if (checkClear(tx, tz)) return { x: tx, z: tz };
+            }
+        }
+        return null; // no clear spot found — skip this landmark
     }
 
     createCantonTower(x, baseH, z, terrain) {
