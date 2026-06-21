@@ -7,7 +7,7 @@ const VEHICLE_COLORS = [
     0xcc4488, 0x44cc88
 ];
 
-const VEHICLE_TYPES = ['sedan', 'sedan', 'sedan', 'bus', 'fire_truck', 'school_bus'];
+const VEHICLE_TYPES = ['sedan', 'sedan', 'sedan', 'sedan', 'sedan', 'sedan', 'sedan', 'bus', 'fire_truck', 'school_bus'];
 
 class CitySystem {
     constructor(scene, noise) {
@@ -245,8 +245,8 @@ class CitySystem {
                     const t = s / chkSteps;
                     const rx = road.start.x + road.dir.x * rLen * t;
                     const rz = road.start.z + road.dir.z * rLen * t;
-                    // Road band: ±(road.width/2 + 0.8) from centerline
-                    const half = road.width / 2 + 0.8;
+                    // Road band: ±(road.width/2 + 1.2) from centerline
+                    const half = road.width / 2 + 1.2;
                     if (maxX > rx - half && minX < rx + half &&
                         maxZ > rz - half && minZ < rz + half) return true;
                 }
