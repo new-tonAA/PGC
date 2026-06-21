@@ -861,66 +861,57 @@ class CitySystem {
 
     createShoppingMall(x, baseH, z, terrain) {
         const group = new THREE.Group();
-        const width = 8;
-        const depth = 6;
-        const height = 5;
+        const bw = 3.0, bd = 2.5, h = 2.5;
 
-        const bodyGeo = new THREE.BoxGeometry(width, height, depth);
+        const bodyGeo = new THREE.BoxGeometry(bw, h, bd);
         const bodyMat = new THREE.MeshPhongMaterial({
-            color: new THREE.Color(0.85, 0.82, 0.78),
-            shininess: 40
+            color: new THREE.Color(0.85, 0.82, 0.78), shininess: 40
         });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
-        body.position.y = height / 2;
+        body.position.y = h / 2;
         body.castShadow = true;
         body.receiveShadow = true;
         group.add(body);
 
-        const glassGeo = new THREE.BoxGeometry(width + 0.05, height * 0.4, depth + 0.05);
+        const glassGeo = new THREE.BoxGeometry(bw + 0.03, h * 0.35, bd + 0.03);
         const glassMat = new THREE.MeshPhongMaterial({
-            color: 0x88bbdd,
-            transparent: true,
-            opacity: 0.5,
-            shininess: 100,
-            emissive: 0xffdd88,
-            emissiveIntensity: 0.0
+            color: 0x88bbdd, transparent: true, opacity: 0.5, shininess: 100,
+            emissive: 0xffdd88, emissiveIntensity: 0.0
         });
         const glass = new THREE.Mesh(glassGeo, glassMat);
-        glass.position.y = height * 0.2;
+        glass.position.y = h * 0.2;
         group.add(glass);
 
-        const windowMeshes = [glass];
-
-        const signGeo = new THREE.BoxGeometry(width * 0.6, 0.8, 0.1);
+        const signGeo = new THREE.BoxGeometry(bw * 0.55, 0.4, 0.06);
         const signMat = new THREE.MeshBasicMaterial({ color: 0xff4444 });
         const sign = new THREE.Mesh(signGeo, signMat);
-        sign.position.set(0, height + 0.5, depth / 2 + 0.06);
+        sign.position.set(0, h + 0.3, bd / 2 + 0.04);
         group.add(sign);
 
-        const signLight = new THREE.PointLight(0xff4444, 0, 20, 2);
-        signLight.position.set(0, height + 0.5, depth / 2 + 1);
+        const signLight = new THREE.PointLight(0xff4444, 0, 12, 2);
+        signLight.position.set(0, h + 0.3, bd / 2 + 0.5);
         group.add(signLight);
         group.userData.signLight = signLight;
 
-        const roofGeo = new THREE.BoxGeometry(width + 0.5, 0.15, depth + 0.5);
+        const roofGeo = new THREE.BoxGeometry(bw + 0.3, 0.1, bd + 0.3);
         const roofMat = new THREE.MeshPhongMaterial({ color: 0x666666 });
         const roof = new THREE.Mesh(roofGeo, roofMat);
-        roof.position.y = height + 0.075;
+        roof.position.y = h + 0.05;
         group.add(roof);
 
-        const interiorLight = new THREE.PointLight(0xffcc66, 0, 55, 2);
-        interiorLight.position.set(0, height * 0.5, 0);
+        const interiorLight = new THREE.PointLight(0xffcc66, 0, 40, 2);
+        interiorLight.position.set(0, h * 0.5, 0);
         interiorLight.castShadow = false;
         group.add(interiorLight);
         group.userData.interiorLight = interiorLight;
 
-        group.userData.windowMeshes = windowMeshes;
+        group.userData.windowMeshes = [glass];
 
         group.position.set(x, baseH, z);
         group.userData.isLandmark = true;
         this.group.add(group);
         this.cityBuildings.push(group);
-        this.placedBuildings.push({ x, z, w: width, d: depth });
+        this.placedBuildings.push({ x, z, w: bw, d: bd });
         return group;
     }
 
