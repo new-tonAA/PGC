@@ -802,6 +802,8 @@ class PCGWorld {
                     this.state.settlementType = 'city';
                 } else if (btn.dataset.terrain === 'islands') {
                     this.state.settlementType = 'village';
+                } else {
+                    this.state.settlementType = 'village';
                 }
                 this.generateWorld();
             });
