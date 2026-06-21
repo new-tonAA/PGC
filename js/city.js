@@ -20,6 +20,7 @@ class CitySystem {
         this.roads = [];
         this.intersections = [];
         this.cityBuildings = [];
+        this._nextBuildingId = 1;
         this.lightsOn = false;
         this.roadMat = null;
         this.roadDashMat = null;
@@ -42,9 +43,10 @@ class CitySystem {
         this.noise = new SimplexNoise(seed);
         this.terrain = terrain;
         this.scene.add(this.group);
-        this.ringCount = options.ringCount || 1;
+        this.ringCount = options.ringCount != null ? options.ringCount : 1;
         this.lightSpacing = options.lightSpacing || 12;
-        this.buildingCount = options.buildingDensity || options.buildingCount || 8;
+        this.buildingCount = options.buildingDensity != null ? options.buildingDensity : (options.buildingCount || 8);
+        this.skipLandmarks = options.skipLandmarks || false;
         const skipVehicles = options.skipVehicles || false;
 
         this.roadMat = new THREE.MeshStandardMaterial({
@@ -218,30 +220,24 @@ class CitySystem {
             const h = terrain.getHeight(inter.x, inter.z);
             const n = adjacency.get(interKey(inter.x, inter.z)) || 0;
             this.createIntersection(inter.x, inter.z, h, roadWidth);
-            if (n >= 3 && Math.random() < 0.6) {
-                this.createTrafficLight(inter.x, inter.z, h, roadWidth);
-            } else if (n >= 2 && Math.random() < 0.25) {
+            if (n >= 4 && Math.random() < 0.35) {
                 this.createTrafficLight(inter.x, inter.z, h, roadWidth);
             }
         }
 
-        const targetBuildings = this.buildingCount > 0 ? this.buildingCount : 999;
+        const targetBuildings = this.buildingCount;  // exact count (0 = rebuild road only)
 
-        // --- Phase 1: generate ALL possible building slots across entire terrain ---
+        // --- Phase 1: place landmarks FIRST (unless skipped by regenerateRoadNetwork) ---
+        if (!this.skipLandmarks && this.intersections.length > 0) {
+            this.createLandmarkBuildings(terrain, roadPositionsX, roadPositionsZ);
+        }
+
+        // --- Phase 2: generate ALL possible building slots (avoid roads + actual landmarks) ---
         this.buildingSlots = [];
         const scanMin = -terrain.size * 0.35;
         const scanMax = terrain.size * 0.35;
         const scanStep = 1.5;
 
-        // Compute planned landmark positions FIRST (before slot scan)
-        // so we can exclude them from building placement
-        const landmarkFootprints = [];
-        if (this.intersections.length > 0) {
-            const { landmarkFootprints: lf } = this.computeLandmarkPositions(terrain, roadPositionsX, roadPositionsZ);
-            landmarkFootprints.push(...lf);
-        }
-
-        // --- isOnRoad helper ---
         const isOnRoad = (bx, bz, bw, bd) => {
             const minX = bx - bw / 2, maxX = bx + bw / 2;
             const minZ = bz - bd / 2, maxZ = bz + bd / 2;
@@ -257,10 +253,13 @@ class CitySystem {
                         maxZ > rz - half && minZ < rz + half) return true;
                 }
             }
-            // Also check landmark footprints
-            for (const fp of landmarkFootprints) {
-                const ox = Math.abs(fp.x - bx), oz = Math.abs(fp.z - bz);
-                if (ox < (fp.w + bw) / 2 + 1.5 && oz < (fp.d + bd) / 2 + 1.5) return true;
+            // Exclude actual landmark positions
+            for (const bld of this.cityBuildings) {
+                if (bld.userData && (bld.userData.isLandmark || bld.userData.isTower)) {
+                    const ox = Math.abs(bld.position.x - bx), oz = Math.abs(bld.position.z - bz);
+                    const lw = 5, ld = 5;
+                    if (ox < (lw + bw) / 2 + 1.5 && oz < (ld + bd) / 2 + 1.5) return true;
+                }
             }
             return false;
         };
@@ -309,18 +308,7 @@ class CitySystem {
 
         console.log('[City] total slots:', this.buildingSlots.length);
 
-        // Shuffle
-        for (let k = this.buildingSlots.length - 1; k > 0; k--) {
-            const r = Math.floor(Math.random() * (k + 1));
-            [this.buildingSlots[k], this.buildingSlots[r]] = [this.buildingSlots[r], this.buildingSlots[k]];
-        }
-
-        // --- Phase 2: create landmarks ---
-        if (this.intersections.length > 0) {
-            this.createLandmarkBuildings(terrain, roadPositionsX, roadPositionsZ);
-        }
-
-        // --- Phase 3: activate target building count from slots ---
+        // --- Phase 3: activate target building count from slots (no shuffle — slots are sequential) ---
         const numToBuild = Math.min(targetBuildings, this.buildingSlots.length);
         for (let n = 0; n < numToBuild; n++) {
             this.buildSlot(this.buildingSlots[n]);
@@ -662,7 +650,8 @@ class CitySystem {
             bulbs,
             pointLight: tLight,
             phase: Math.random() * 20,
-            colors
+            colors,
+            interX: x, interZ: z  // intersection center (before offset)
         });
     }
 
@@ -726,16 +715,21 @@ class CitySystem {
     createLandmarkBuildings(terrain, roadPositionsX, roadPositionsZ) {
         if (roadPositionsX.length < 2 || roadPositionsZ.length < 2) return;
 
-        const centerIdxX = Math.floor(roadPositionsX.length / 2);
-        const centerIdxZ = Math.floor(roadPositionsZ.length / 2);
-        const cx = roadPositionsX[centerIdxX];
-        const cz = roadPositionsZ[centerIdxZ];
-        const ch = terrain.getHeight(cx, cz);
-
-        if (ch >= terrain.waterLevel + 0.3) {
-            const spot = this.findClearSpot(cx + 4, cz + 4, 2.5, terrain);
-            if (spot) {
-                this.createCantonTower(spot.x, terrain.getHeight(spot.x, spot.z), spot.z, terrain);
+        const halfSize = terrain.size * 0.28;
+        // Canton Tower — only create if none exists (prevents duplicates on road regen)
+        const hasTower = this.cityBuildings.some(b => b.userData && b.userData.isTower);
+        if (!hasTower) {
+            let ctSpot = null;
+            for (let attempt = 0; attempt < 30; attempt++) {
+                const rx = (Math.random() - 0.5) * halfSize * 1.8;
+                const rz = (Math.random() - 0.5) * halfSize * 1.8;
+                const rh = terrain.getHeight(rx, rz);
+                if (rh < terrain.waterLevel + 0.3) continue;
+                const s = this.findClearSpot(rx, rz, 2.5, terrain);
+                if (s) { ctSpot = s; break; }
+            }
+            if (ctSpot) {
+                this.createCantonTower(ctSpot.x, terrain.getHeight(ctSpot.x, ctSpot.z), ctSpot.z, terrain);
             }
         }
 
@@ -743,38 +737,18 @@ class CitySystem {
             const gridSpacing = roadPositionsX.length > 1
                 ? (roadPositionsX[roadPositionsX.length-1] - roadPositionsX[0]) / (roadPositionsX.length - 1)
                 : 10;
-            const spot = this.findClearSpot(cx + gridSpacing * 0.5, cz + gridSpacing * 0.5, 1.5, terrain);
-            if (spot) {
-                this.createShoppingMall(spot.x, terrain.getHeight(spot.x, spot.z), spot.z, terrain);
+            const cx = roadPositionsX[Math.floor(roadPositionsX.length / 2)];
+            const cz = roadPositionsZ[Math.floor(roadPositionsZ.length / 2)];
+            // Mall — use random offset from center block
+            const mx = cx + (Math.random() - 0.5) * halfSize * 1.0;
+            const mz = cz + (Math.random() - 0.5) * halfSize * 1.0;
+            if (terrain.getHeight(mx, mz) >= terrain.waterLevel + 0.3) {
+                const spot = this.findClearSpot(mx, mz, 1.5, terrain);
+                if (spot) {
+                    this.createShoppingMall(spot.x, terrain.getHeight(spot.x, spot.z), spot.z, terrain);
+                }
             }
         }
-    }
-
-    computeLandmarkPositions(terrain, roadPositionsX, roadPositionsZ) {
-        const landmarkFootprints = [];
-        if (roadPositionsX.length < 2 || roadPositionsZ.length < 2)
-            return { landmarkFootprints };
-
-        const centerIdxX = Math.floor(roadPositionsX.length / 2);
-        const centerIdxZ = Math.floor(roadPositionsZ.length / 2);
-        const cx = roadPositionsX[centerIdxX];
-        const cz = roadPositionsZ[centerIdxZ];
-        const ch = terrain.getHeight(cx, cz);
-
-        if (ch >= terrain.waterLevel + 0.3) {
-            const spot = this.findClearSpot(cx + 4, cz + 4, 2.5, terrain);
-            if (spot) landmarkFootprints.push({ x: spot.x, z: spot.z, w: 5, d: 5 });
-        }
-
-        if (roadPositionsX.length > 2 && roadPositionsZ.length > 2) {
-            const gridSpacing = roadPositionsX.length > 1
-                ? (roadPositionsX[roadPositionsX.length-1] - roadPositionsX[0]) / (roadPositionsX.length - 1)
-                : 10;
-            const spot = this.findClearSpot(cx + gridSpacing * 0.5, cz + gridSpacing * 0.5, 1.5, terrain);
-            if (spot) landmarkFootprints.push({ x: spot.x, z: spot.z, w: 3, d: 2.5 });
-        }
-
-        return { landmarkFootprints };
     }
 
     findClearSpot(sx, sz, size, terrain) {
@@ -928,51 +902,76 @@ class CitySystem {
 
     createShoppingMall(x, baseH, z, terrain) {
         const group = new THREE.Group();
-        const bw = 3.0, bd = 2.5, h = 2.5;
+        const bw = 3.5, bd = 3.0, h = 3.0;
 
+        // Main body — warm cream stone
         const bodyGeo = new THREE.BoxGeometry(bw, h, bd);
         const bodyMat = new THREE.MeshPhongMaterial({
-            color: new THREE.Color(0.85, 0.82, 0.78), shininess: 40
+            color: new THREE.Color(0.95, 0.9, 0.82), shininess: 30
         });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
         body.position.y = h / 2;
-        body.castShadow = true;
-        body.receiveShadow = true;
+        body.castShadow = true; body.receiveShadow = true;
         group.add(body);
 
-        const glassGeo = new THREE.BoxGeometry(bw + 0.03, h * 0.35, bd + 0.03);
-        const glassMat = new THREE.MeshPhongMaterial({
-            color: 0x88bbdd, transparent: true, opacity: 0.5, shininess: 100,
-            emissive: 0xffdd88, emissiveIntensity: 0.0
-        });
-        const glass = new THREE.Mesh(glassGeo, glassMat);
-        glass.position.y = h * 0.2;
-        group.add(glass);
+        // Dark band around mid-height (belt course)
+        const beltGeo = new THREE.BoxGeometry(bw + 0.02, 0.12, bd + 0.02);
+        const beltMat = new THREE.MeshPhongMaterial({ color: 0x444444, shininess: 20 });
+        const belt = new THREE.Mesh(beltGeo, beltMat);
+        belt.position.y = h * 0.55;
+        group.add(belt);
 
-        const signGeo = new THREE.BoxGeometry(bw * 0.55, 0.4, 0.06);
-        const signMat = new THREE.MeshBasicMaterial({ color: 0xff4444 });
+        // Glass strip on upper half
+        const glassGeo = new THREE.BoxGeometry(bw + 0.04, h * 0.3, 0.12);
+        const glassMat = new THREE.MeshPhongMaterial({
+            color: 0x88ccff, transparent: true, opacity: 0.55, shininess: 100,
+            emissive: 0xffeecc, emissiveIntensity: 0.05
+        });
+        const glassFront = new THREE.Mesh(glassGeo, glassMat);
+        glassFront.position.set(0, h * 0.65, bd / 2 + 0.06);
+        group.add(glassFront);
+        const glassBack = new THREE.Mesh(glassGeo, glassMat);
+        glassBack.position.set(0, h * 0.65, -bd / 2 - 0.06);
+        group.add(glassBack);
+
+        // Red awning — recognizable shop canopy
+        const awningGeo = new THREE.BoxGeometry(bw * 0.75, 0.08, 0.55);
+        const awningMat = new THREE.MeshPhongMaterial({ color: 0xcc3333, shininess: 10 });
+        const awning = new THREE.Mesh(awningGeo, awningMat);
+        awning.position.set(0, h * 0.45, bd / 2 + 0.3);
+        group.add(awning);
+
+        // Large red sign on top
+        const signGeo = new THREE.BoxGeometry(bw * 0.7, 0.5, 0.08);
+        const signMat = new THREE.MeshBasicMaterial({ color: 0xff2222 });
         const sign = new THREE.Mesh(signGeo, signMat);
-        sign.position.set(0, h + 0.3, bd / 2 + 0.04);
+        sign.position.set(0, h + 0.35, bd / 2 + 0.05);
         group.add(sign);
 
-        const signLight = new THREE.PointLight(0xff4444, 0, 12, 2);
-        signLight.position.set(0, h + 0.3, bd / 2 + 0.5);
+        // Sign light
+        const signLight = new THREE.PointLight(0xff4444, 0, 15, 2);
+        signLight.position.set(0, h + 0.35, bd / 2 + 0.8);
         group.add(signLight);
         group.userData.signLight = signLight;
 
-        const roofGeo = new THREE.BoxGeometry(bw + 0.3, 0.1, bd + 0.3);
-        const roofMat = new THREE.MeshPhongMaterial({ color: 0x666666 });
+        // Sloped roof (gable)
+        const roofH = 0.8;
+        const roofGeo = new THREE.ConeGeometry(Math.max(bw, bd) * 0.65, roofH, 4);
+        const roofMat = new THREE.MeshPhongMaterial({ color: 0x663333, flatShading: true });
         const roof = new THREE.Mesh(roofGeo, roofMat);
-        roof.position.y = h + 0.05;
+        roof.position.y = h + 0.05 + roofH / 2;
+        roof.rotation.y = Math.PI / 4;
+        roof.castShadow = true;
         group.add(roof);
 
-        const interiorLight = new THREE.PointLight(0xffcc66, 0, 40, 2);
+        // Interior light
+        const interiorLight = new THREE.PointLight(0xffcc66, 0, 45, 2);
         interiorLight.position.set(0, h * 0.5, 0);
         interiorLight.castShadow = false;
         group.add(interiorLight);
         group.userData.interiorLight = interiorLight;
 
-        group.userData.windowMeshes = [glass];
+        group.userData.windowMeshes = [glassFront, glassBack];
 
         group.position.set(x, baseH, z);
         group.userData.isLandmark = true;
@@ -1633,7 +1632,7 @@ class CitySystem {
         for (let i = 0; i < maxVehicles; i++) {
             const road = this.roads[Math.floor(Math.random() * this.roads.length)];
             const isH = Math.abs(road.dir.z) < 0.1;
-            const speed = 2 + Math.random() * 3;
+            const speed = 1.5 + Math.random() * 2;
             const goesEndToStart = road.oneWay === 'end';
             const lane = goesEndToStart ? -0.5 : 0.5;
 
@@ -2026,18 +2025,27 @@ class CitySystem {
 
             const nextEndX = road.end.x, nextEndZ = road.end.z;
             const distToEnd = (1.0 - ud.progress) * road.length;
-            for (const tl of this.trafficLights) {
-                const tlx = tl.group.position.x, tlz = tl.group.position.z;
-                const toL = Math.sqrt((tlx - v.position.x) ** 2 + (tlz - v.position.z) ** 2);
-                if (toL < 8) {
-                    const ph = (time + tl.phase) % 10;
-                    const greenH = ph < 4.2;
-                    if ((isH && !greenH) || (!isH && greenH)) {
-                        if (toL < brakeDist) brakeDist = toL;
+
+            // Traffic light check — full stop at stop line when red
+            let stoppedByLight = false;
+            if (distToEnd < 6) {
+                const jx = ud.reverse ? road.start.x : road.end.x;
+                const jz = ud.reverse ? road.start.z : road.end.z;
+                for (const tl of this.trafficLights) {
+                    if ((tl.interX - jx) ** 2 + (tl.interZ - jz) ** 2 < 1.5) {
+                        const ph = (time + tl.phase) % 10;
+                        const greenH = ph < 4.2;
+                        const redForMe = (isH && !greenH) || (!isH && greenH);
+                        if (redForMe && distToEnd < 2.5) {
+                            ud.currentSpeed = 0;
+                            stoppedByLight = true;
+                        }
+                        break;
                     }
                 }
             }
 
+            // Vehicle collision avoidance
             for (let j = 0; j < this.vehicles.length; j++) {
                 if (i === j) continue;
                 const o = this.vehicles[j];
@@ -2048,7 +2056,6 @@ class CitySystem {
                 if (od > 10) continue;
 
                 if (o.userData.road === road && !o.userData.turning) {
-                    // 同路段：FIX - 只有同向车才让路（避免对向车互相刹车）
                     if (o.userData.reverse === ud.reverse) {
                         let gap;
                         if (ud.reverse) {
@@ -2058,7 +2065,6 @@ class CitySystem {
                         }
                         if (gap > 0 && gap < brakeDist) brakeDist = gap;
                     }
-                    // 对向车：不刹车，由 findOutgoingRoad 的单向约束保证不会出现对向车
                 } else {
                     const oRoad = o.userData.road;
                     if (!oRoad) continue;
@@ -2072,18 +2078,23 @@ class CitySystem {
                 }
             }
 
-            if (brakeDist < 1.5) ud.currentSpeed = 0;
-            else if (brakeDist < 6) ud.currentSpeed = Math.max(0.1, ud.speed * (brakeDist - 1.5) / 4.5);
-            else ud.currentSpeed += (ud.speed - ud.currentSpeed) * Math.min(1, dt * 4);
+            if (!stoppedByLight) {
+                if (brakeDist < 1.5) ud.currentSpeed = 0;
+                else if (brakeDist < 6) ud.currentSpeed = Math.max(0.1, ud.speed * (brakeDist - 1.5) / 4.5);
+                else ud.currentSpeed += (ud.speed - ud.currentSpeed) * Math.min(1, dt * 4);
+            }
 
-            // 反堵塞
+            // Anti-stuck recovery (skip if waiting at traffic light)
             if (ud.currentSpeed < 0.05) {
                 ud.stuckTimer = (ud.stuckTimer || 0) + dt;
-                if (ud.stuckTimer > 1.0) {
-                    // 找到车前方最近的路口重定向
-                    const junctionX = ud.reverse ? road.start.x : road.end.x;
-                    const junctionZ = ud.reverse ? road.start.z : road.end.z;
-                    const res = this.findOutgoingRoad(road, junctionX, junctionZ);
+                const jx = ud.reverse ? road.start.x : road.end.x;
+                const jz = ud.reverse ? road.start.z : road.end.z;
+                let waitingAtLight = false;
+                for (const tl of this.trafficLights) {
+                    if ((tl.interX - jx) ** 2 + (tl.interZ - jz) ** 2 < 1.5) { waitingAtLight = true; break; }
+                }
+                if (ud.stuckTimer > 1.5 && !waitingAtLight) {
+                    const res = this.findOutgoingRoad(road, jx, jz);
                     if (res) {
                         ud.road = res.road;
                         ud.reverse = res.reverse;
@@ -2374,26 +2385,15 @@ class CitySystem {
     buildSlot(slot) {
         const group = this.createSkyscraper(slot.bx, slot.bh, slot.bz, slot.bw, slot.height, slot.bd);
         slot.group = group;
-    }
-
-    tearDownSlot(slot) {
-        const group = slot.group;
-        if (!group) return;
-        const idx = this.cityBuildings.indexOf(group);
-        if (idx >= 0) this.cityBuildings.splice(idx, 1);
-        this.group.remove(group);
-        group.traverse(c => {
-            if (c.geometry) c.geometry.dispose();
-            if (c.material) {
-                if (Array.isArray(c.material)) c.material.forEach(m => m.dispose());
-                else c.material.dispose();
-            }
-        });
-        slot.group = null;
+        slot.buildingId = this._nextBuildingId++;
     }
 
     activeBuildingCount() {
-        return this.buildingSlots.filter(s => s.group !== null).length;
+        let count = 0;
+        for (const bld of this.cityBuildings) {
+            if (!bld.userData || !(bld.userData.isLandmark || bld.userData.isTower)) count++;
+        }
+        return count;
     }
 
     addBuildings(n) {
@@ -2405,18 +2405,59 @@ class CitySystem {
                 added++;
             }
         }
+        if (added < n) {
+            // Fallback: if not enough null slots, expand slot pool
+            console.warn('[City] only added', added, 'of', n, '— expanding slot pool');
+            const extra = n - added;
+            for (let i = 0; i < extra; i++) {
+                const ox = (Math.random() - 0.5) * 10;
+                const oz = (Math.random() - 0.5) * 10;
+                const h = this.terrain ? this.terrain.getHeight(ox, oz) : 0.5;
+                this.buildingSlots.push({ bx: ox, bz: oz, bw: 1.2, height: 3, bd: 1.2, bh: h, group: null });
+                this.buildSlot(this.buildingSlots[this.buildingSlots.length - 1]);
+                added++;
+            }
+        }
         return added;
     }
 
     removeBuildings(n) {
-        const active = this.buildingSlots.filter(s => s.group !== null && s.group.userData && !s.group.userData.isLandmark);
-        for (let i = active.length - 1; i > 0; i--) {
+        // Delete N random regular buildings directly from cityBuildings
+        const regular = [];
+        for (const bld of this.cityBuildings) {
+            if (!bld.userData || !(bld.userData.isLandmark || bld.userData.isTower)) regular.push(bld);
+        }
+        // Shuffle
+        for (let i = regular.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
-            [active[i], active[j]] = [active[j], active[i]];
+            [regular[i], regular[j]] = [regular[j], regular[i]];
         }
         let removed = 0;
-        for (let i = 0; i < Math.min(n, active.length); i++) {
-            this.tearDownSlot(active[i]);
+        for (let i = 0; i < Math.min(n, regular.length); i++) {
+            const bld = regular[i];
+            // Find + clear the slot this building belongs to
+            for (const slot of this.buildingSlots) {
+                if (slot.group === bld) { slot.group = null; break; }
+            }
+            // Remove from cityBuildings
+            const idx = this.cityBuildings.indexOf(bld);
+            if (idx >= 0) this.cityBuildings.splice(idx, 1);
+            // Remove from placedBuildings
+            for (let j = this.placedBuildings.length - 1; j >= 0; j--) {
+                const pb = this.placedBuildings[j];
+                if (Math.abs(pb.x - bld.position.x) < 0.5 && Math.abs(pb.z - bld.position.z) < 0.5) {
+                    this.placedBuildings.splice(j, 1); break;
+                }
+            }
+            // Dispose + remove from scene
+            this.group.remove(bld);
+            bld.traverse(c => {
+                if (c.geometry) c.geometry.dispose();
+                if (c.material) {
+                    if (Array.isArray(c.material)) c.material.forEach(m => m.dispose());
+                    else c.material.dispose();
+                }
+            });
             removed++;
         }
         return removed;
@@ -2454,6 +2495,157 @@ class CitySystem {
         }
     }
 
+    regenerateRoadNetwork(terrain, seed, vehicleCount, options = {}) {
+        // 1. Detach all buildings + landmarks, preserve buildingId
+        console.log('[RGN] START: buildingSlots.length=', this.buildingSlots.length, 'cityBuildings.length=', this.cityBuildings.length, 'activeBuildingCount=', this.activeBuildingCount());
+        const saved = [];
+        let maxBId = 0;
+        for (const slot of this.buildingSlots) {
+            if (slot.group) {
+                saved.push({ isLM: !!(slot.group.userData && (slot.group.userData.isLandmark || slot.group.userData.isTower)),
+                             bx: slot.bx, bz: slot.bz, bw: slot.bw, height: slot.height, bd: slot.bd, bh: slot.bh,
+                             group: slot.group, buildingId: slot.buildingId || 0 });
+                if (slot.buildingId > maxBId) maxBId = slot.buildingId;
+                this.group.remove(slot.group);
+            }
+        }
+        // Also grab landmarks not in buildingSlots
+        for (const bld of this.cityBuildings) {
+            if (bld.userData && (bld.userData.isLandmark || bld.userData.isTower) && !saved.some(s => s.group === bld)) {
+                saved.push({ isLM: true, bx: bld.position.x, bz: bld.position.z, bw: 5, bd: 5, bh: bld.position.y, height: 3, group: bld, buildingId: 0 });
+                this.group.remove(bld);
+            }
+        }
+
+        // 2. Clear + rebuild only roads and slots
+        this.clear();
+        this.generate(terrain, seed, vehicleCount, { ...options, buildingDensity: 0, skipLandmarks: true });
+        this._nextBuildingId = maxBId + 1; // resume from highest saved ID
+
+        // 3. Road overlap helper
+        const onRoad = (bx, bz, bw, bd) => {
+            const minX = bx - bw/2, maxX = bx + bw/2, minZ = bz - bd/2, maxZ = bz + bd/2;
+            for (const road of this.roads) {
+                const steps = Math.ceil(road.length / 0.4);
+                for (let s = 0; s <= steps; s++) {
+                    const t = s/steps, rx = road.start.x + road.dir.x * road.length * t, rz = road.start.z + road.dir.z * road.length * t;
+                    const half = road.width/2 + 1.2;
+                    if (maxX > rx - half && minX < rx + half && maxZ > rz - half && minZ < rz + half) return true;
+                }
+            }
+            return false;
+        };
+
+        // 4. Restore: landmarks always; regulars: relocate/shrink if on road, demolish as last resort
+        let lost = 0;
+        for (const sv of saved) {
+            if (sv.isLM) {
+                const size = (sv.group.userData && sv.group.userData.isTower) ? 2.5 : 1.5;
+                if (onRoad(sv.group.position.x, sv.group.position.z, size*2, size*2)) {
+                    const spot = this.findClearSpot(sv.group.position.x, sv.group.position.z, size, terrain);
+                    if (spot) sv.group.position.set(spot.x, terrain.getHeight(spot.x, spot.z), spot.z);
+                }
+                this.group.add(sv.group);
+                this.cityBuildings.push(sv.group);
+                this.placedBuildings.push({ x: sv.group.position.x, z: sv.group.position.z, w: size*2, d: size*2 });
+            } else {
+                let placed = false;
+                if (onRoad(sv.bx, sv.bz, sv.bw, sv.bd)) {
+                    // Step 1: try shrinking
+                    const shrinkSizes = [sv.bw * 0.7, sv.bw * 0.5, sv.bw * 0.35];
+                    for (const newW of shrinkSizes) {
+                        const newD = newW * (sv.bd / Math.max(0.1, sv.bw));
+                        if (newW < 0.5 || newD < 0.5) continue;
+                        if (!onRoad(sv.bx, sv.bz, newW, newD)) {
+                            // Rebuild group at smaller size
+                            sv.group.traverse(c => {
+                                if (c.geometry) c.geometry.dispose();
+                                if (c.material) { if (Array.isArray(c.material)) c.material.forEach(m=>m.dispose()); else c.material.dispose(); }
+                            });
+                            sv.bw = newW; sv.bd = newD;
+                            sv.group = this.createSkyscraper(sv.bx, sv.bh, sv.bz, sv.bw, Math.min(sv.height, 6), sv.bd);
+                            placed = true;
+                            break;
+                        }
+                    }
+                    // Step 2: try moving to nearby empty slot
+                    if (!placed) {
+                        for (const slot of this.buildingSlots) {
+                            if (slot.group !== null) continue;
+                            if (!onRoad(slot.bx, slot.bz, sv.bw, sv.bd)) {
+                                // Move building to this slot
+                                sv.group.position.set(slot.bx, slot.bh, slot.bz);
+                                slot.group = sv.group;
+                                slot.buildingId = sv.buildingId;
+                                placed = true;
+                                break;
+                            }
+                        }
+                    }
+                    // Step 3: if relocation also fails, try shrinking into an empty slot
+                    if (!placed) {
+                        for (const slot of this.buildingSlots) {
+                            if (slot.group !== null) continue;
+                            const smallW = Math.min(sv.bw, 0.8), smallD = Math.min(sv.bd, 0.8);
+                            if (!onRoad(slot.bx, slot.bz, smallW, smallD)) {
+                                sv.group.traverse(c => {
+                                    if (c.geometry) c.geometry.dispose();
+                                    if (c.material) { if (Array.isArray(c.material)) c.material.forEach(m=>m.dispose()); else c.material.dispose(); }
+                                });
+                                sv.group = this.createSkyscraper(slot.bx, slot.bh, slot.bz, smallW, Math.min(sv.height, 4), smallD);
+                                slot.group = sv.group;
+                                slot.buildingId = sv.buildingId;
+                                placed = true;
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // Not on road — restore as-is
+                    placed = true;
+                }
+
+                if (placed) {
+                    this.group.add(sv.group);
+                    this.cityBuildings.push(sv.group);
+                    if (sv.group.position) {
+                        this.placedBuildings.push({ x: sv.group.position.x, z: sv.group.position.z, w: sv.bw, d: sv.bd });
+                    }
+                    // If not already occupying a slot, find one
+                    let hasSlot = false;
+                    for (const slot of this.buildingSlots) {
+                        if (slot.group === sv.group) { hasSlot = true; break; }
+                    }
+                    if (!hasSlot) {
+                        for (const slot of this.buildingSlots) {
+                            if (slot.group === null) { slot.group = sv.group; slot.buildingId = sv.buildingId; break; }
+                        }
+                    }
+                } else {
+                    // Unsalvageable — dispose
+                    sv.group.traverse(c => {
+                        if (c.geometry) c.geometry.dispose();
+                        if (c.material) { if (Array.isArray(c.material)) c.material.forEach(m=>m.dispose()); else c.material.dispose(); }
+                    });
+                    lost++;
+                }
+            }
+        }
+
+        // 5. Fill lost slots
+        console.log('[RGN] END: lost=', lost, 'cityBuildings=', this.cityBuildings.length, 'activeCount=', this.activeBuildingCount());
+        let rebuilt = 0;
+        for (let j = 0; j < lost; j++) {
+            for (const slot of this.buildingSlots) {
+                if (slot.group === null) { this.buildSlot(slot); rebuilt++; break; }
+            }
+        }
+
+        return { restored: saved.filter(s => !s.isLM).length - lost, lost, rebuilt };
+    }
+
+    // ---- end regenerateRoadNetwork ----
+
     clear() {
         this.group.traverse((child) => {
             if (child.geometry) child.geometry.dispose();
@@ -2474,6 +2666,7 @@ class CitySystem {
         this.roads = [];
         this.intersections = [];
         this.cityBuildings = [];
+        this._nextBuildingId = 1;
         this.lightsOn = false;
         this.roadMat = null;
         this.roadDashMat = null;

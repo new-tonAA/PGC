@@ -552,15 +552,17 @@ class PCGWorld {
             }
         }
 
-        // Collect street light positions for vegetation exclusion
+        // Include city building positions for tree avoidance
+        if (this.city && this.city.cityBuildings) {
+            for (const bld of this.city.cityBuildings) {
+                housePositions.push({ x: bld.position.x, z: bld.position.z, radius: 4.0 });
+            }
+        }
+
         const streetLightPositions = [];
         if (this.city && this.city.streetLightLamps) {
             for (const sl of this.city.streetLightLamps) {
-                streetLightPositions.push({
-                    x: sl.group.position.x,
-                    z: sl.group.position.z,
-                    radius: 1.2
-                });
+                streetLightPositions.push({ x: sl.group.position.x, z: sl.group.position.z, radius: 1.2 });
             }
         }
 
@@ -670,6 +672,12 @@ class PCGWorld {
             x: h.position.x, z: h.position.z,
             radius: h.userData.boundingRadius || 3
         }));
+        // Include city building positions for tree avoidance
+        if (this.city && this.city.cityBuildings) {
+            for (const bld of this.city.cityBuildings) {
+                housePositions.push({ x: bld.position.x, z: bld.position.z, radius: 4.0 });
+            }
+        }
         const roadPositions = [];
         const roadSegments = [];
         if (this.needsCitySystem() && this.city.intersections) {
@@ -724,9 +732,7 @@ class PCGWorld {
                 this.city.removeBuildings(current - target);
             }
             const label = document.getElementById('houseCountVal');
-            const newCount = this.city.activeBuildingCount();
-            if (label) label.textContent = newCount;
-            this.state.houseCount = newCount;
+            if (label) label.textContent = this.city.activeBuildingCount();
             this.updateTimeOfDay(this.state.timeOfDay);
             return;
         }
@@ -753,6 +759,36 @@ class PCGWorld {
         this._regenTimer = setTimeout(() => {
             this.generateWorld();
         }, 150);
+    }
+
+    regenerateVegetation() {
+        if (!this.vegetation) return;
+        this.vegetation.clear();
+        const buildingPositions = [];
+        if (this.city && this.city.cityBuildings) {
+            for (const bld of this.city.cityBuildings) {
+                buildingPositions.push({ x: bld.position.x, z: bld.position.z, radius: 4.0 });
+            }
+        }
+        const roadPositions = [], roadSegments = [], streetLightPositions = [];
+        if (this.city) {
+            if (this.city.roads) {
+                for (const road of this.city.roads) roadSegments.push({
+                    start: { x: road.start.x, z: road.start.z },
+                    end: { x: road.end.x, z: road.end.z },
+                    width: road.width || 2.2
+                });
+            }
+            if (this.city.streetLightLamps) {
+                for (const sl of this.city.streetLightLamps) {
+                    streetLightPositions.push({ x: sl.group.position.x, z: sl.group.position.z, radius: 1.2 });
+                }
+            }
+        }
+        this.vegetation.generate(this.terrain, {
+            seed: this.state.seed, settlementType: this.state.settlementType,
+            housePositions: buildingPositions, roadPositions, roadSegments, streetLightPositions
+        });
     }
 
     setupUI() {
