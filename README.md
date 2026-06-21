@@ -3,7 +3,7 @@
 > **Procedural Content Generation** — A Three.js-based procedural city generation & real-time rendering engine
 
 <p align="center">
-  <img src="images/README1.png" alt="PCG World Screenshot" width="800" />
+  <img src="images/README1.png" alt="PCG World Screenshot" width="500" />
 </p>
 <p align="center"><em>Real-time procedural city · Day/Night cycle · Dynamic weather · AI traffic</em></p>
 
@@ -61,7 +61,7 @@
 | **Houses** | 1~30 | Number of houses |
 | **Vehicles** | 0~20 | Vehicle count (city mode only) |
 | **Road** | Density 20~80 | Road grid density |
-| **Light** | Spacing 6~24 | Street light spacing |
+| **Light** | Brightness 0~24 | Light brightness multiplier (0=off) |
 | **Weather** | CLEAR / RAIN / SNOW | Weather toggle |
 | **FX** | FIRE / LIGHT | Fire toggle / City lights toggle |
 | **Time** | 0:00 ~ 24:00 | Day/night time slider |

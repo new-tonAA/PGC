@@ -35,7 +35,7 @@ class PCGWorld {
             lightSpacing: 12,
             weather: 'clear',
             fireActive: false,
-            lightsOn: false,
+            lightsOn: true,
             timeOfDay: 12,
             seed: 42,
             starDensity: 0
@@ -284,20 +284,21 @@ class PCGWorld {
                 this.terrain.setSkyColor(new THREE.Color(isTwilight ? 0.6 : 0.4, isTwilight ? 0.4 : 0.6, isTwilight ? 0.3 : 0.9));
             }
         } else {
-            // Nighttime - deeper but still visible
+            // Nighttime — pitch black, only artificial lights illuminate the scene
             const nightDepth = Math.min(1, Math.abs(sunY) * 2);
-            this.sunLight.intensity = 0.04;
-            this.sunLight.color.setHSL(0.6, 0.1, 0.25);
-            this.ambientLight.intensity = 0.08 + nightDepth * 0.02;
-            this.ambientLight.color.setHSL(0.6, 0.08, 0.08 + nightDepth * 0.04);
-            this.hemiLight.intensity = 0.02 + nightDepth * 0.01;
-            this.hemiLight.color.setHSL(0.6, 0.05, 0.06);
+            // Kill ALL natural scene lighting — roads, rocks, trees only visible via streetlights
+            this.sunLight.intensity = 0;
+            this.sunLight.color.setHSL(0.6, 0.05, 0.15);
+            this.ambientLight.intensity = 0;
+            this.ambientLight.color.setHSL(0.6, 0.08, 0.03);
+            this.hemiLight.intensity = 0;
+            this.hemiLight.color.setHSL(0.6, 0.05, 0.03);
 
             if (this.terrain) {
                 this.terrain.setSunDirection(new THREE.Vector3(0, 0.5, 0));
-                this.terrain.setSunColor(new THREE.Color(0.02, 0.02, 0.04));
-                this.terrain.setAmbientColor(new THREE.Color(0.015, 0.015, 0.03));
-                this.terrain.setSkyColor(new THREE.Color(0.015, 0.015, 0.04));
+                this.terrain.setSunColor(new THREE.Color(0, 0, 0));
+                this.terrain.setAmbientColor(new THREE.Color(0, 0, 0));
+                this.terrain.setSkyColor(new THREE.Color(0, 0, 0));
             }
 
             this.scene.background.setHSL(0.62, 0.12, 0.04 + nightDepth * 0.02);
@@ -332,49 +333,55 @@ class PCGWorld {
     }
 
     updateAllLights(time) {
-        const nightFactor = (time < 6 || time > 18) ? 1.0 :
+        let nightFactor = (time < 6 || time > 18) ? 1.0 :
             (time < 8 ? (8 - time) / 2 : (time > 16 ? (time - 16) / 2 : 0));
+        // Keep a minimum glow when lights are on — so the brightness slider always has visible effect
+        if (this.state.lightsOn) nightFactor = Math.max(0.1, nightFactor);
+        // lightSpacing slider controls global light brightness (6=dim, 12=normal, 24=bright)
+        const brightnessMult = this.state.lightSpacing / 12;
 
         if (this.state.lightsOn) {
             // House interior lights
             if (this.houses) {
                 for (const house of this.houses.houses) {
                     if (house.userData.interiorLight) {
-                        house.userData.interiorLight.intensity = nightFactor * 15.0;
+                        house.userData.interiorLight.intensity = nightFactor * 15.0 * brightnessMult;
                     }
                 }
             }
             // City building lights - stronger for visible ground illumination
             if (this.city) {
                 for (const bld of this.city.cityBuildings) {
+                    // Canton Tower has its own light handling in city.update()
+                    if (bld.userData.isTower) continue;
                     if (bld.userData.interiorLight) {
-                        bld.userData.interiorLight.intensity = nightFactor * 15.0;
+                        bld.userData.interiorLight.intensity = nightFactor * 15.0 * brightnessMult;
                     }
                     if (bld.userData.windowMeshes) {
                         for (const w of bld.userData.windowMeshes) {
-                            w.material.emissiveIntensity = nightFactor * 1.5;
+                            w.material.emissiveIntensity = nightFactor * 1.5 * brightnessMult;
                         }
                     }
                     if (bld.userData.signLight) {
-                        bld.userData.signLight.intensity = nightFactor * 8.0;
+                        bld.userData.signLight.intensity = nightFactor * 8.0 * brightnessMult;
                     }
                     if (bld.userData.beamLight) {
-                        bld.userData.beamLight.intensity = nightFactor * 12.0;
+                        bld.userData.beamLight.intensity = nightFactor * 12.0 * brightnessMult;
                     }
                     if (bld.userData.topLight) {
-                        bld.userData.topLight.intensity = nightFactor * 4.0;
+                        bld.userData.topLight.intensity = nightFactor * 4.0 * brightnessMult;
                     }
                     if (bld.userData.lanternGlow) {
-                        bld.userData.lanternGlow.intensity = nightFactor * 4.0;
+                        bld.userData.lanternGlow.intensity = nightFactor * 4.0 * brightnessMult;
                     }
                 }
                 // Street lights - bright ground illumination
                 for (const sl of this.city.streetLightLamps) {
                     if (sl.spotLight) {
-                        sl.spotLight.intensity = nightFactor * 18.0;
+                        sl.spotLight.intensity = nightFactor * 18.0 * brightnessMult;
                     }
                     if (sl.pointLight) {
-                        sl.pointLight.intensity = nightFactor * 10.0;
+                        sl.pointLight.intensity = nightFactor * 10.0 * brightnessMult;
                     }
                     if (sl.lampMat) {
                         const isOn = nightFactor > 0.15;
@@ -382,26 +389,29 @@ class PCGWorld {
                         sl.lampMat.color.set(isOn ? 0xffffdd : 0x666666);
                         if (sl.lampMat.emissive !== undefined) {
                             sl.lampMat.emissive.set(isOn ? 0xffffcc : 0x000000);
-                            sl.lampMat.emissiveIntensity = isOn ? nightFactor * 2.5 : 0;
+                            sl.lampMat.emissiveIntensity = isOn ? nightFactor * 2.5 * brightnessMult : 0;
                         }
                     }
-                    if (sl.glowMat) {
-                        sl.glowMat.opacity = nightFactor * 0.75;
+                    if (sl.beamMat) {
+                        sl.beamMat.opacity = Math.min(0.35, nightFactor * 0.15 * brightnessMult);
                     }
-                    if (sl.coneMat) {
-                        sl.coneMat.opacity = nightFactor * 0.2;
+                    if (sl.groundGlowMat) {
+                        sl.groundGlowMat.opacity = Math.min(0.3, nightFactor * 0.12 * brightnessMult);
                     }
                 }
-                // Vehicle headlights - maximum realism
+                // Vehicle headlights
                 for (const v of this.city.vehicles) {
                     if (v.userData.headlight) {
-                        v.userData.headlight.intensity = nightFactor * 15.0;
+                        v.userData.headlight.intensity = nightFactor * 15.0 * brightnessMult;
                     }
                     if (v.userData.headlightPoint) {
-                        v.userData.headlightPoint.intensity = nightFactor * 6.0;
+                        v.userData.headlightPoint.intensity = nightFactor * 6.0 * brightnessMult;
+                    }
+                    if (v.userData.headlightBeamMat) {
+                        v.userData.headlightBeamMat.opacity = Math.min(0.18, nightFactor * 0.08 * brightnessMult);
                     }
                     if (v.userData.tailLightMat) {
-                        v.userData.tailLightMat.emissiveIntensity = nightFactor * 1.2;
+                        v.userData.tailLightMat.emissiveIntensity = nightFactor * 1.2 * brightnessMult;
                     }
                 }
             }
@@ -416,6 +426,7 @@ class PCGWorld {
             }
             if (this.city) {
                 for (const bld of this.city.cityBuildings) {
+                    if (bld.userData.isTower) continue;
                     if (bld.userData.interiorLight) {
                         bld.userData.interiorLight.intensity = 0;
                     }
@@ -439,8 +450,8 @@ class PCGWorld {
                             sl.lampMat.emissiveIntensity = 0;
                         }
                     }
-                    if (sl.glowMat) sl.glowMat.opacity = 0;
-                    if (sl.coneMat) sl.coneMat.opacity = 0;
+                    if (sl.beamMat) sl.beamMat.opacity = 0;
+                    if (sl.groundGlowMat) sl.groundGlowMat.opacity = 0;
                 }
                 for (const v of this.city.vehicles) {
                     if (v.userData.headlight) {
@@ -448,6 +459,9 @@ class PCGWorld {
                     }
                     if (v.userData.headlightPoint) {
                         v.userData.headlightPoint.intensity = 0;
+                    }
+                    if (v.userData.headlightBeamMat) {
+                        v.userData.headlightBeamMat.opacity = 0;
                     }
                     if (v.userData.tailLightMat) {
                         v.userData.tailLightMat.emissiveIntensity = 0;
@@ -766,13 +780,8 @@ class PCGWorld {
             lightSpacingSlider.addEventListener('input', () => {
                 this.state.lightSpacing = parseInt(lightSpacingSlider.value);
                 lightSpacingVal.textContent = lightSpacingSlider.value;
-            });
-            lightSpacingSlider.addEventListener('change', () => {
-                if (this.city && this.needsCitySystem()) {
-                    this.city.lightSpacing = this.state.lightSpacing;
-                    this.city.regenerateStreetLights(this.terrain);
-                    this.updateTimeOfDay(this.state.timeOfDay);
-                }
+                if (this.city) this.city.lightSpacing = this.state.lightSpacing;
+                this.updateTimeOfDay(this.state.timeOfDay);
             });
         }
 

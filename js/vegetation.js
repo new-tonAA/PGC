@@ -82,6 +82,7 @@ class VegetationSystem {
 
         // Road positions from city system (to avoid)
         const roadPositions = options.roadPositions || [];
+        const roadSegments = options.roadSegments || [];
 
         let placed = 0;
         const maxAttempts = treeCount * 8;
@@ -126,8 +127,30 @@ class VegetationSystem {
             }
             if (tooClose) continue;
 
-            // Avoid roads
-            if (roadPositions.length > 0) {
+            // Avoid roads by real road segments when available.
+            if (roadSegments.length > 0) {
+                for (const seg of roadSegments) {
+                    const sx = seg.start?.x ?? 0;
+                    const sz = seg.start?.z ?? 0;
+                    const ex = seg.end?.x ?? sx;
+                    const ez = seg.end?.z ?? sz;
+                    const segDx = ex - sx;
+                    const segDz = ez - sz;
+                    const segLen2 = segDx * segDx + segDz * segDz;
+                    if (segLen2 < 1e-6) continue;
+
+                    const t = Math.max(0, Math.min(1, ((x - sx) * segDx + (z - sz) * segDz) / segLen2));
+                    const cx = sx + segDx * t;
+                    const cz = sz + segDz * t;
+                    const dist = Math.sqrt((x - cx) * (x - cx) + (z - cz) * (z - cz));
+                    const avoidR = ((seg.width || 2.2) * 0.5) + 0.8;
+                    if (dist < avoidR) {
+                        tooClose = true;
+                        break;
+                    }
+                }
+                if (tooClose) continue;
+            } else if (roadPositions.length > 0) {
                 for (const rp of roadPositions) {
                     const dx = Math.abs(x - rp.x);
                     const dz = Math.abs(z - rp.z);

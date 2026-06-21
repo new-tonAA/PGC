@@ -467,6 +467,7 @@ class CitySystem {
             const dashY = dh + 0.10;
             dash.position.set(px, dashY, pz);
             dash.rotation.z = Math.atan2(dir.z, dir.x);
+            dash.receiveShadow = true;
             this.group.add(dash);
         }
 
@@ -482,6 +483,7 @@ class CitySystem {
             const offset = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(side * (width / 2 - 0.15));
             line.position.set(mid.x + offset.x, roadY + 0.01, mid.z + offset.z);
             line.rotation.z = Math.atan2(dir.z, dir.x);
+            line.receiveShadow = true;
             this.group.add(line);
         }
 
@@ -512,6 +514,7 @@ class CitySystem {
                     h + 0.1,
                     z + offsetZ + cosR * lateralOffset
                 );
+                stripe.receiveShadow = true;
                 this.group.add(stripe);
             }
         }
@@ -609,21 +612,37 @@ class CitySystem {
         lamp.position.set(0.8, 4.28, 0);
         group.add(lamp);
 
-        const glowGeo = new THREE.CircleGeometry(1.2, 16);
-        const glowMat = new THREE.MeshBasicMaterial({
+        // Downward light beam cone — visible projection from lamp to ground
+        const beamHeight = 4.3;
+        const beamGeo = new THREE.CylinderGeometry(0.05, 2.0, beamHeight, 16, 1, true);
+        const beamMat = new THREE.MeshBasicMaterial({
             color: 0xffffcc,
             transparent: true,
-            opacity: 0,
+            opacity: 0.15,
             side: THREE.DoubleSide,
             depthWrite: false,
             blending: THREE.AdditiveBlending,
         });
-        const glow = new THREE.Mesh(glowGeo, glowMat);
-        glow.rotation.x = -Math.PI / 2;
-        glow.position.set(0.8, 4.15, 0);
-        group.add(glow);
+        const beam = new THREE.Mesh(beamGeo, beamMat);
+        beam.position.set(0.8, 4.2 - beamHeight / 2, 0);
+        group.add(beam);
 
-        const spotLight = new THREE.SpotLight(0xffeebb, 0, 35, Math.PI / 3, 0.5, 1.5);
+        // Ground highlight disc — subtle glow circle on the road surface
+        const groundGlowGeo = new THREE.CircleGeometry(1.8, 16);
+        const groundGlowMat = new THREE.MeshBasicMaterial({
+            color: 0xffffdd,
+            transparent: true,
+            opacity: 0.12,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+        });
+        const groundGlow = new THREE.Mesh(groundGlowGeo, groundGlowMat);
+        groundGlow.rotation.x = -Math.PI / 2;
+        groundGlow.position.set(0.8, 0.01, 0);
+        group.add(groundGlow);
+
+        const spotLight = new THREE.SpotLight(0xffeebb, 15, 35, Math.PI / 3, 0.5, 1.5);
         spotLight.position.set(0.8, 4.2, 0);
         spotLight.target.position.set(0.8, -0.5, 0);
         spotLight.castShadow = true;
@@ -635,24 +654,10 @@ class CitySystem {
         group.add(spotLight);
         group.add(spotLight.target);
 
-        const sLight = new THREE.PointLight(0xffeebb, 0, 25, 1.8);
+        const sLight = new THREE.PointLight(0xffeebb, 8, 25, 1.8);
         sLight.position.set(0.8, 3.8, 0);
         sLight.castShadow = false;
         group.add(sLight);
-
-        const coneGeo = new THREE.ConeGeometry(1.5, 0.08, 8);
-        const coneMat = new THREE.MeshBasicMaterial({
-            color: 0xffffdd,
-            transparent: true,
-            opacity: 0,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-            blending: THREE.AdditiveBlending,
-        });
-        const cone = new THREE.Mesh(coneGeo, coneMat);
-        cone.position.set(0.8, -0.02, 4.5);
-        cone.rotation.x = -Math.PI;
-        group.add(cone);
 
         if (roadDirection !== null) {
             group.rotation.y = roadDirection;
@@ -662,7 +667,7 @@ class CitySystem {
         this.group.add(group);
 
         this.streetLightLamps.push({
-            group, lamp, spotLight, pointLight: sLight, lampMat, glowMat, groundCone: cone, coneMat
+            group, lamp, spotLight, pointLight: sLight, lampMat, beamMat, groundGlowMat
         });
     }
 
@@ -751,6 +756,8 @@ class CitySystem {
         deck.position.y = totalH * 0.72;
         deck.rotation.x = Math.PI / 2;
         group.add(deck);
+        group.userData.deck = deck;
+        group.userData.deckMat = deckMat;
 
         const windowMeshes = [];
         for (let i = 0; i < 12; i++) {
@@ -785,12 +792,13 @@ class CitySystem {
         }
         group.userData.windowMeshes = windowMeshes;
 
-        const towerLight = new THREE.PointLight(0xffcc66, 0, 55, 2);
+        const towerLight = new THREE.PointLight(0xffcc66, 30, 80, 1.2);
         towerLight.position.set(0, totalH * 0.7, 0);
         group.add(towerLight);
-        group.userData.interiorLight = towerLight;
+        group.userData.towerLight = towerLight;
+        group.userData.isTower = true;
 
-        const topLight = new THREE.PointLight(0xff4444, 0, 30, 2);
+        const topLight = new THREE.PointLight(0xff4444, 8, 80, 1.0);
         topLight.position.set(0, totalH + antennaH, 0);
         group.add(topLight);
         group.userData.topLight = topLight;
@@ -1699,6 +1707,24 @@ class CitySystem {
         group.add(hlPoint);
         group.userData.headlightPoint = hlPoint;
 
+        // Visible headlight beam cone — projects forward, like real headlights
+        const beamLength = 5.0;
+        const beamGeo2 = new THREE.CylinderGeometry(0.8, 0.03, beamLength, 10, 1, true);
+        const beamMat2 = new THREE.MeshBasicMaterial({
+            color: 0xffffdd,
+            transparent: true,
+            opacity: 0.06,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+        });
+        const beamMesh = new THREE.Mesh(beamGeo2, beamMat2);
+        beamMesh.rotation.z = -direction * Math.PI / 2;
+        beamMesh.position.set(direction * (0.65 + beamLength / 2), 0.2, 0);
+        group.add(beamMesh);
+        group.userData.headlightBeam = beamMesh;
+        group.userData.headlightBeamMat = beamMat2;
+
         const tailGeo = new THREE.SphereGeometry(0.05, 6, 4);
         const tailMat = new THREE.MeshBasicMaterial({
             color: 0xff0000, transparent: true, opacity: 0.9
@@ -1864,6 +1890,7 @@ class CitySystem {
     }
 
     update(time, delta) {
+        const brightnessMult = this.lightSpacing / 12;
         const dt = Math.min(delta || 0.016, 0.05);
 
         for (let i = 0; i < this.vehicles.length; i++) {
@@ -2133,34 +2160,68 @@ class CitySystem {
                 tl.bulbs[i].material.color.set(isActive ? tl.colors[i] : 0x333333);
                 tl.bulbs[i].material.opacity = isActive ? 1.0 : 0.3;
                 tl.bulbs[i].material.emissive = isActive ? new THREE.Color(tl.colors[i]) : new THREE.Color(0x000000);
-                tl.bulbs[i].material.emissiveIntensity = isActive ? 0.8 : 0;
+                tl.bulbs[i].material.emissiveIntensity = (isActive ? 0.8 : 0) * brightnessMult;
             }
             tl.pointLight.color.set(tl.colors[activeIndex]);
-            tl.pointLight.intensity = 1.5;
+            tl.pointLight.intensity = 1.5 * brightnessMult;
         }
 
-        // 灯塔扫描光束
-        for (const bld of this.cityBuildings) {
-            if (bld.userData.beamLight && bld.userData.beamTarget) {
-                const beamAngle = time * 0.7;
-                const beamRadius = 45;
-                bld.userData.beamTarget.position.set(
-                    Math.cos(beamAngle) * beamRadius,
-                    -5 + Math.sin(time * 0.3) * 1,
-                    Math.sin(beamAngle) * beamRadius
-                );
-                const pulse = 8 + Math.sin(time * 1.8) * 2 + Math.sin(time * 3.7) * 1;
-                bld.userData.beamLight.intensity = Math.max(5, pulse);
+        // 灯塔扫描光束 (only when lights are on)
+        if (this.lightsOn) {
+            for (const bld of this.cityBuildings) {
+                if (bld.userData.beamLight && bld.userData.beamTarget) {
+                    const beamAngle = time * 0.7;
+                    const beamRadius = 45;
+                    bld.userData.beamTarget.position.set(
+                        Math.cos(beamAngle) * beamRadius,
+                        -5 + Math.sin(time * 0.3) * 1,
+                        Math.sin(beamAngle) * beamRadius
+                    );
+                    const pulse = 8 + Math.sin(time * 1.8) * 2 + Math.sin(time * 3.7) * 1;
+                    bld.userData.beamLight.intensity = Math.max(5, pulse) * brightnessMult;
+                }
+                if (bld.userData.lanternGlow) {
+                    bld.userData.lanternGlow.intensity = (2.5 + Math.sin(time * 1.5) * 0.5 + Math.sin(time * 2.7) * 0.3) * brightnessMult;
+                }
+                if (bld.userData.topLight && bld.userData.topBulb) {
+                    const blinkPhase = time * 3;
+                    const blink = Math.sin(blinkPhase) > 0.3;
+                    bld.userData.topLight.intensity = (blink ? 8.0 : 0.5) * brightnessMult;
+                    bld.userData.topLight.distance = 80 * Math.min(brightnessMult, 2.0);
+                    if (bld.userData.topBulb) {
+                        bld.userData.topBulb.material.opacity = (blink ? 1.0 : 0.15) * Math.min(brightnessMult, 2.0);
+                    }
+                }
+                // Canton Tower special lights
+                if (bld.userData.isTower) {
+                    if (bld.userData.towerLight) {
+                        bld.userData.towerLight.intensity = 30 * brightnessMult;
+                        bld.userData.towerLight.distance = 80 * Math.min(brightnessMult, 2.0);
+                    }
+                    if (bld.userData.deckMat) {
+                        bld.userData.deckMat.emissiveIntensity = 0.3 * brightnessMult;
+                    }
+                    if (bld.userData.windowMeshes) {
+                        for (const w of bld.userData.windowMeshes) {
+                            w.material.emissiveIntensity = 0.6 * brightnessMult;
+                            w.material.opacity = 0.5 + 0.5 * Math.sin(time * 0.7) * brightnessMult;
+                        }
+                    }
+                }
             }
-            if (bld.userData.lanternGlow) {
-                bld.userData.lanternGlow.intensity = 2.5 + Math.sin(time * 1.5) * 0.5 + Math.sin(time * 2.7) * 0.3;
-            }
-            if (bld.userData.topLight && bld.userData.topBulb) {
-                const blinkPhase = time * 3;
-                const blink = Math.sin(blinkPhase) > 0.3;
-                bld.userData.topLight.intensity = blink ? 2.0 : 0.1;
-                if (bld.userData.topBulb) {
-                    bld.userData.topBulb.material.opacity = blink ? 1.0 : 0.15;
+        } else {
+            for (const bld of this.cityBuildings) {
+                if (bld.userData.beamLight) bld.userData.beamLight.intensity = 0;
+                if (bld.userData.lanternGlow) bld.userData.lanternGlow.intensity = 0;
+                if (bld.userData.topLight) bld.userData.topLight.intensity = 0;
+                if (bld.userData.topBulb) bld.userData.topBulb.material.opacity = 0.05;
+                if (bld.userData.towerLight) bld.userData.towerLight.intensity = 0;
+                if (bld.userData.deckMat) bld.userData.deckMat.emissiveIntensity = 0;
+                if (bld.userData.windowMeshes) {
+                    for (const w of bld.userData.windowMeshes) {
+                        w.material.emissiveIntensity = 0;
+                        w.material.opacity = 0.3;
+                    }
                 }
             }
         }
