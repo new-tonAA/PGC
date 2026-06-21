@@ -29,7 +29,7 @@ class PCGWorld {
         this.state = {
             terrainType: 'plains',
             settlementType: 'village',
-            houseCount: 8,
+            houseCount: 2,
             vehicleCount: 5,
             roadDensity: 50,
             lightSpacing: 12,
@@ -492,6 +492,13 @@ class PCGWorld {
             if (this.state.lightsOn) {
                 this.city.setLights(true);
             }
+            // Sync slider to actual regular building count (landmarks not counted)
+            const slider = document.getElementById('houseCount');
+            const label = document.getElementById('houseCountVal');
+            const actual = this.city.activeBuildingCount();
+            if (slider) { slider.max = this.city.buildingSlots.length; slider.value = actual; }
+            if (label) label.textContent = actual;
+            this.state.houseCount = actual;
         }
 
         this.houses = new ProceduralHouse(this.scene, new SimplexNoise(this.state.seed));
@@ -603,13 +610,20 @@ class PCGWorld {
         if (this.needsCitySystem()) {
             // Regenerate city layout (roads + buildings) without vehicles
             this.city.generate(this.terrain, this.state.seed, 0, {
+                buildingDensity: this.state.houseCount,
                 roadDensity: this.state.roadDensity,
                 lightSpacing: this.state.lightSpacing,
                 skipVehicles: true
             });
             if (this.state.lightsOn) this.city.setLights(true);
-            // Then regenerate vehicles separately
             this.city.regenerateVehicles(this.terrain, savedVehicleCount);
+            // Sync slider to regular building count
+            const slider = document.getElementById('houseCount');
+            const label = document.getElementById('houseCountVal');
+            const actual = this.city.activeBuildingCount();
+            if (slider) { slider.max = this.city.buildingSlots.length; slider.value = actual; }
+            if (label) label.textContent = actual;
+            this.state.houseCount = actual;
         }
 
         if (!this.needsCitySystem() || this.state.terrainType === 'islands') {
@@ -659,12 +673,21 @@ class PCGWorld {
         this.updateTimeOfDay(this.state.timeOfDay);
     }
 
-    // PCG incremental: update house count without full regeneration
-    // Only adds/removes houses, keeps existing ones in place
     updateHouseCount() {
-        // City mode: house slider controls building density → full rebuild
-        if (this.needsCitySystem() && this.state.terrainType !== 'islands') {
-            this.scheduleRegen();
+        // City mode: slider controls number of regular buildings (landmarks always present)
+        if (this.needsCitySystem() && this.state.terrainType !== 'islands' && this.city && this.city.buildingSlots) {
+            const target = Math.max(0, Math.min(this.city.buildingSlots.length, this.state.houseCount));
+            const current = this.city.activeBuildingCount();
+            if (target > current) {
+                this.city.addBuildings(target - current);
+            } else if (target < current) {
+                this.city.removeBuildings(current - target);
+            }
+            const label = document.getElementById('houseCountVal');
+            const newCount = this.city.activeBuildingCount();
+            if (label) label.textContent = newCount;
+            this.state.houseCount = newCount;
+            this.updateTimeOfDay(this.state.timeOfDay);
             return;
         }
 

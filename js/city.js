@@ -29,6 +29,8 @@ class CitySystem {
         this.halfSize = 0;
         this.roadWidth = 2.5;
         this.placedBuildings = [];
+        this.cityBlocks = [];
+        this.buildingSlots = [];
         this.snowAccum = 0;
         this.lighthouseGroup = null;
         this.roadPositionsX = [];
@@ -210,29 +212,90 @@ class CitySystem {
             }
         }
 
-        const maxBuildings = this.buildingCount > 0 ? this.buildingCount : 999;
-        let buildingPlaced = 0;
+        const targetBuildings = this.buildingCount > 0 ? this.buildingCount : 999;
 
-        for (let i = 0; i < roadPositionsX.length - 1; i++) {
-            for (let j = 0; j < roadPositionsZ.length - 1; j++) {
-                if (buildingPlaced >= maxBuildings) break;
-                const x1 = roadPositionsX[i] + roadWidth / 2 + 0.8;
-                const z1 = roadPositionsZ[j] + roadWidth / 2 + 0.8;
-                const x2 = roadPositionsX[i + 1] - roadWidth / 2 - 0.8;
-                const z2 = roadPositionsZ[j + 1] - roadWidth / 2 - 0.8;
+        // --- Phase 1: generate ALL possible building slots across entire terrain ---
+        this.buildingSlots = [];
+        const scanMin = -terrain.size * 0.35;
+        const scanMax = terrain.size * 0.35;
+        const scanStep = 1.5; // coarse grid, random offset within each cell
 
-                if (x2 - x1 < 2 || z2 - z1 < 2) continue;
-
-                const centerX = (x1 + x2) / 2;
-                const centerZ = (z1 + z2) / 2;
-                const h = terrain.getHeight(centerX, centerZ);
-                if (h < terrain.waterLevel + 0.3) continue;
-                const distFromCenter = Math.sqrt(centerX * centerX + centerZ * centerZ);
-                const heightFactor = Math.max(0.25, 1.0 - distFromCenter / (terrain.size * 0.45));
-                this.generateBlock(x1, z1, x2, z2, h, heightFactor, terrain);
-                buildingPlaced++;
+        // Quick exclusion: build a set of road-occupied cells
+        const roadZone = new Set();
+        for (const road of this.roads) {
+            const steps = Math.ceil(road.length / 0.6);
+            for (let s = 0; s <= steps; s++) {
+                const t = s / steps;
+                const rx = road.start.x + road.dir.x * road.length * t;
+                const rz = road.start.z + road.dir.z * road.length * t;
+                // Mark a band of width road.width/2 + 1.0 around each road
+                for (let dx = -road.width / 2 - 1.0; dx <= road.width / 2 + 1.0; dx += 0.8) {
+                    for (let dz = -road.width / 2 - 1.0; dz <= road.width / 2 + 1.0; dz += 0.8) {
+                        roadZone.add(`${Math.round((rx + dx) * 2)},${Math.round((rz + dz) * 2)}`);
+                    }
+                }
             }
-            if (buildingPlaced >= maxBuildings) break;
+        }
+        // Also mark intersection centers
+        for (const inter of this.intersections) {
+            for (let dx = -2.5; dx <= 2.5; dx += 0.8) {
+                for (let dz = -2.5; dz <= 2.5; dz += 0.8) {
+                    roadZone.add(`${Math.round((inter.x + dx) * 2)},${Math.round((inter.z + dz) * 2)}`);
+                }
+            }
+        }
+
+        for (let cx = scanMin; cx <= scanMax; cx += scanStep) {
+            for (let cz = scanMin; cz <= scanMax; cz += scanStep) {
+                // Random offset within cell
+                const ox = cx + (Math.random() - 0.5) * scanStep;
+                const oz = cz + (Math.random() - 0.5) * scanStep;
+
+                // Skip if on road
+                const rk = `${Math.round(ox * 2)},${Math.round(oz * 2)}`;
+                if (roadZone.has(rk)) continue;
+
+                const bh = terrain.getHeight(ox, oz);
+                if (bh < terrain.waterLevel + 0.3) continue;
+
+                const distFromCenter = Math.sqrt(ox * ox + oz * oz);
+                const heightFactor = Math.max(0.25, 1.0 - distFromCenter / (terrain.size * 0.45));
+
+                // Random building size, constrained aspect ratio (0.5 ~ 2.0)
+                const bw = 0.6 + Math.random() * 3.4; // 0.6 ~ 4.0
+                const bdLimit = Math.max(0.6, bw * 0.5);
+                const bdHigh = Math.min(4.0, bw * 2.0);
+                const bd = bdLimit + Math.random() * Math.max(0.01, bdHigh - bdLimit);
+
+                // Check against already-placed slots
+                let blocked = false;
+                for (const s of this.buildingSlots) {
+                    if (Math.abs(s.bx - ox) < (s.bw + bw) / 2 + 0.4 &&
+                        Math.abs(s.bz - oz) < (s.bd + bd) / 2 + 0.4) { blocked = true; break; }
+                }
+                if (blocked) continue;
+
+                const hNoise = this.noise.noise2D(ox * 0.15, oz * 0.15);
+                // Height: min 2m, max 20m (below Canton Tower's 22m)
+                const maxH = 2 + heightFactor * 14 + hNoise * 4;
+                const height = 2 + Math.random() * maxH;
+
+                this.buildingSlots.push({ bx: ox, bz: oz, bw, height: Math.min(20, height), bd, bh, group: null });
+            }
+        }
+
+        console.log('[City] total slots:', this.buildingSlots.length);
+
+        // Shuffle
+        for (let k = this.buildingSlots.length - 1; k > 0; k--) {
+            const r = Math.floor(Math.random() * (k + 1));
+            [this.buildingSlots[k], this.buildingSlots[r]] = [this.buildingSlots[r], this.buildingSlots[k]];
+        }
+
+        // --- Phase 2: activate first targetBuildings slots ---
+        const numToBuild = Math.min(targetBuildings, this.buildingSlots.length);
+        for (let n = 0; n < numToBuild; n++) {
+            this.buildSlot(this.buildingSlots[n]);
         }
 
         if (this.intersections.length > 0) {
@@ -781,6 +844,7 @@ class CitySystem {
         group.userData.topBulb = topBulb;
 
         group.position.set(x, baseH, z);
+        group.userData.isLandmark = true;
         this.group.add(group);
         this.cityBuildings.push(group);
         this.placedBuildings.push({ x, z, w: 5, d: 5 });
@@ -844,9 +908,11 @@ class CitySystem {
         group.userData.windowMeshes = windowMeshes;
 
         group.position.set(x, baseH, z);
+        group.userData.isLandmark = true;
         this.group.add(group);
         this.cityBuildings.push(group);
         this.placedBuildings.push({ x, z, w: width, d: depth });
+        return group;
     }
 
     generateBlock(x1, z1, x2, z2, baseH, heightFactor, terrain) {
@@ -2245,6 +2311,58 @@ class CitySystem {
         }
     }
 
+    // --- Slot pool methods ---
+    buildSlot(slot) {
+        const group = this.createSkyscraper(slot.bx, slot.bh, slot.bz, slot.bw, slot.height, slot.bd);
+        slot.group = group;
+    }
+
+    tearDownSlot(slot) {
+        const group = slot.group;
+        if (!group) return;
+        const idx = this.cityBuildings.indexOf(group);
+        if (idx >= 0) this.cityBuildings.splice(idx, 1);
+        this.group.remove(group);
+        group.traverse(c => {
+            if (c.geometry) c.geometry.dispose();
+            if (c.material) {
+                if (Array.isArray(c.material)) c.material.forEach(m => m.dispose());
+                else c.material.dispose();
+            }
+        });
+        slot.group = null;
+    }
+
+    activeBuildingCount() {
+        return this.buildingSlots.filter(s => s.group !== null).length;
+    }
+
+    addBuildings(n) {
+        let added = 0;
+        for (const slot of this.buildingSlots) {
+            if (added >= n) break;
+            if (slot.group === null) {
+                this.buildSlot(slot);
+                added++;
+            }
+        }
+        return added;
+    }
+
+    removeBuildings(n) {
+        const active = this.buildingSlots.filter(s => s.group !== null && s.group.userData && !s.group.userData.isLandmark);
+        for (let i = active.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [active[i], active[j]] = [active[j], active[i]];
+        }
+        let removed = 0;
+        for (let i = 0; i < Math.min(n, active.length); i++) {
+            this.tearDownSlot(active[i]);
+            removed++;
+        }
+        return removed;
+    }
+
     regenerateStreetLights(terrain) {
         for (const sl of this.streetLightLamps) {
             this.group.remove(sl.group);
@@ -2307,6 +2425,8 @@ class CitySystem {
         this.roadPositionsZ = [];
         this.halfSize = 0;
         this.placedBuildings = [];
+        this.cityBlocks = [];
+        this.buildingSlots = [];
         this.snowAccum = 0;
         this.lighthouseGroup = null;
     }
