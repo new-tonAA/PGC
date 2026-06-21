@@ -220,40 +220,32 @@ class CitySystem {
         const scanMax = terrain.size * 0.35;
         const scanStep = 1.5; // coarse grid, random offset within each cell
 
-        // Quick exclusion: build a set of road-occupied cells
-        const roadZone = new Set();
-        for (const road of this.roads) {
-            const steps = Math.ceil(road.length / 0.6);
-            for (let s = 0; s <= steps; s++) {
-                const t = s / steps;
-                const rx = road.start.x + road.dir.x * road.length * t;
-                const rz = road.start.z + road.dir.z * road.length * t;
-                // Mark a band of width road.width/2 + 1.0 around each road
-                for (let dx = -road.width / 2 - 1.0; dx <= road.width / 2 + 1.0; dx += 0.8) {
-                    for (let dz = -road.width / 2 - 1.0; dz <= road.width / 2 + 1.0; dz += 0.8) {
-                        roadZone.add(`${Math.round((rx + dx) * 2)},${Math.round((rz + dz) * 2)}`);
-                    }
+        // --- Slot generation helpers ---
+        const isOnRoad = (bx, bz, bw, bd) => {
+            const minX = bx - bw / 2, maxX = bx + bw / 2;
+            const minZ = bz - bd / 2, maxZ = bz + bd / 2;
+            for (const road of this.roads) {
+                const rLen = road.length;
+                // Walk along the road, check if building overlaps the road band
+                const chkSteps = Math.ceil(rLen / 1.0);
+                for (let s = 0; s <= chkSteps; s++) {
+                    const t = s / chkSteps;
+                    const rx = road.start.x + road.dir.x * rLen * t;
+                    const rz = road.start.z + road.dir.z * rLen * t;
+                    // Road band: ±(road.width/2 + 0.8) from centerline
+                    const half = road.width / 2 + 0.8;
+                    if (maxX > rx - half && minX < rx + half &&
+                        maxZ > rz - half && minZ < rz + half) return true;
                 }
             }
-        }
-        // Also mark intersection centers
-        for (const inter of this.intersections) {
-            for (let dx = -2.5; dx <= 2.5; dx += 0.8) {
-                for (let dz = -2.5; dz <= 2.5; dz += 0.8) {
-                    roadZone.add(`${Math.round((inter.x + dx) * 2)},${Math.round((inter.z + dz) * 2)}`);
-                }
-            }
-        }
+            return false;
+        };
 
         for (let cx = scanMin; cx <= scanMax; cx += scanStep) {
             for (let cz = scanMin; cz <= scanMax; cz += scanStep) {
                 // Random offset within cell
                 const ox = cx + (Math.random() - 0.5) * scanStep;
                 const oz = cz + (Math.random() - 0.5) * scanStep;
-
-                // Skip if on road
-                const rk = `${Math.round(ox * 2)},${Math.round(oz * 2)}`;
-                if (roadZone.has(rk)) continue;
 
                 const bh = terrain.getHeight(ox, oz);
                 if (bh < terrain.waterLevel + 0.3) continue;
@@ -262,10 +254,13 @@ class CitySystem {
                 const heightFactor = Math.max(0.25, 1.0 - distFromCenter / (terrain.size * 0.45));
 
                 // Random building size, constrained aspect ratio (0.5 ~ 2.0)
-                const bw = 0.6 + Math.random() * 3.4; // 0.6 ~ 4.0
+                const bw = 0.6 + Math.random() * 3.4;
                 const bdLimit = Math.max(0.6, bw * 0.5);
                 const bdHigh = Math.min(4.0, bw * 2.0);
                 const bd = bdLimit + Math.random() * Math.max(0.01, bdHigh - bdLimit);
+
+                // Skip if on road
+                if (isOnRoad(ox, oz, bw, bd)) continue;
 
                 // Check against already-placed slots
                 let blocked = false;
@@ -2078,12 +2073,9 @@ class CitySystem {
 
                         ud.road    = nextRoad;
                         ud.reverse = reverse;
-                        // FIX: lane 与 reverse 保持一致
                         ud.lane    = reverse ? -0.5 : 0.5;
 
-                        // 在新路段上计算初始 progress
-                        // progress 始终 = 距离 start 的比例 (0=start, 1=end)
-                        // reverse=true 时车从 end 进，progress 自然 ≈ 1.0，后续递减
+                        // Compute new progress on the new road
                         if (afterIsH) {
                             ud.progress = (savedX - nextRoad.start.x) / Math.max(nextRoad.length, 0.1);
                         } else {
@@ -2091,26 +2083,25 @@ class CitySystem {
                         }
                         ud.progress = Math.max(0.01, Math.min(0.99, ud.progress));
 
-                        // 转弯弧线：控制点 = 路口外角（几何交叉点）
+                        // Right-angle turn: quadratic Bezier with control point at the
+                        // geometric corner (turnEnd.x, turnStart.z) — a rounded 90° arc.
+                        // Tangent at t=0 is purely in the old road's direction,
+                        // tangent at t=1 is purely in the new road's direction. Zero swing.
                         if (beforeIsH !== afterIsH) {
                             ud.turning    = true;
                             ud.turnTimer  = 0;
-                            // 起点 = 旧路末端位置
                             ud.turnStartX = savedX;
                             ud.turnStartZ = savedZ;
-                            // 终点 = 新路入口位置（lane偏移后）
+
                             const npx = nextRoad.start.x + nextRoad.dir.x * nextRoad.length * ud.progress;
                             const npz = nextRoad.start.z + nextRoad.dir.z * nextRoad.length * ud.progress;
                             ud.turnEndX = afterIsH ? npx : npx + ud.lane;
                             ud.turnEndZ = afterIsH ? npz + ud.lane : npz;
-                            // 控制点：旧路末端按新路方向偏移 lane，形成平滑弧线
-                            // 旧路 lane 方向 ⊥ 旧路 dir，新路 lane 方向 ⊥ 新路 dir
-                            const oldLaneDir = beforeIsH ? {x:0, z:(savedZ > junctionZ ? 1 : -1)}
-                                                          : {x:(savedX > junctionX ? 1 : -1), z:0};
-                            const R = 1.0;
-                            ud.turnMidX = junctionX + oldLaneDir.x * R + (afterIsH ? 0 : ud.lane * 1.5);
-                            ud.turnMidZ = junctionZ + oldLaneDir.z * R + (afterIsH ? ud.lane * 1.5 : 0);
-                            ud.turnTargetR = 0; // unused, rotation now follows curve tangent
+
+                            // Control point: geometric corner of the two roads
+                            ud.turnMidX = ud.turnEndX;
+                            ud.turnMidZ = ud.turnStartZ;
+                            ud.turnTargetR = 0;
                         } else {
                             ud.turning = false;
                         }
