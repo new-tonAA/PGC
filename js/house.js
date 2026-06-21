@@ -159,16 +159,13 @@ class ProceduralHouse {
     }
 
     // Check if position is far enough from other houses
-    isPositionValid(x, z, houseWidth, houseDepth) {
-        const minDist = houseWidth * 0.7 + houseDepth * 0.7;
+    isPositionValid(x, z, spacingW, spacingD) {
+        // Min house radius ~1.2m; max ~3.5m. Use spacing to estimate.
+        const estRadius = Math.max(1.2, Math.max(spacingW, spacingD) * 0.5 + 0.8);
         for (const pos of this.placedPositions) {
-            const dx = x - pos.x;
-            const dz = z - pos.z;
+            const dx = x - pos.x, dz = z - pos.z;
             const dist = Math.sqrt(dx * dx + dz * dz);
-            const requiredDist = minDist + pos.radius;
-            if (dist < requiredDist) {
-                return false;
-            }
+            if (dist < estRadius + pos.radius) return false;
         }
         return true;
     }
@@ -361,17 +358,31 @@ class ProceduralHouse {
         this.clear();
 
         const settlement = SETTLEMENT_TYPES[this.settlementType];
-        const maxAttempts = count * 30;
-
         let placed = 0;
-        for (let attempt = 0; attempt < maxAttempts && placed < count; attempt++) {
-            const spot = terrain.findFlatSpot(0, 0, terrain.size * 0.45);
-            if (!spot) continue;
-
-            const minSpacing = settlement.spacing;
-            if (!this.isPositionValid(spot.x, spot.z, minSpacing, minSpacing)) continue;
-
-            this.generate(spot, terrain);
+        const halfSize = terrain.size * 0.5;
+        for (const { spacing, attempts } of [
+            { spacing: settlement.spacing, attempts: count * 40 },
+            { spacing: 1.8, attempts: count * 60 },
+            { spacing: 1.0, attempts: count * 120 },
+        ]) {
+            if (placed >= count) break;
+            for (let a = 0; a < attempts && placed < count; a++) {
+                const spot = terrain.findFlatSpot(0, 0, terrain.size * 0.48);
+                if (!spot) continue;
+                if (!this.isPositionValid(spot.x, spot.z, spacing, spacing)) continue;
+                this.generate(spot, terrain);
+                placed++;
+            }
+        }
+        // Fallback: brute-force random positions across entire terrain
+        for (let a = 0; a < count * 300 && placed < count; a++) {
+            const x = (Math.random() - 0.5) * terrain.size * 0.95;
+            const z = (Math.random() - 0.5) * terrain.size * 0.95;
+            if (Math.abs(x) > halfSize || Math.abs(z) > halfSize) continue;
+            const h = terrain.getHeight(x, z);
+            if (h < terrain.waterLevel + 0.5) continue;
+            if (!this.isPositionValid(x, z, 1.2, 1.2)) continue;
+            this.generate({ x, y: h, z }, terrain);
             placed++;
         }
     }
@@ -390,14 +401,32 @@ class ProceduralHouse {
     // PCG incremental: add houses without removing existing ones
     addHouses(terrain, count) {
         const settlement = SETTLEMENT_TYPES[this.settlementType];
-        const maxAttempts = count * 40;
+        const halfSize = terrain.size * 0.5;
         let placed = 0;
-        for (let attempt = 0; attempt < maxAttempts && placed < count; attempt++) {
-            const spot = terrain.findFlatSpot(0, 0, terrain.size * 0.45);
-            if (!spot) continue;
-            const minSpacing = settlement.spacing;
-            if (!this.isPositionValid(spot.x, spot.z, minSpacing, minSpacing)) continue;
-            this.generate(spot, terrain);
+        // Stage 1-3: smart placement with findFlatSpot
+        for (const { spacing, attempts } of [
+            { spacing: settlement.spacing, attempts: count * 40 },
+            { spacing: 1.8, attempts: count * 60 },
+            { spacing: 1.0, attempts: count * 120 },
+        ]) {
+            if (placed >= count) break;
+            for (let a = 0; a < attempts && placed < count; a++) {
+                const spot = terrain.findFlatSpot(0, 0, terrain.size * 0.48);
+                if (!spot) continue;
+                if (!this.isPositionValid(spot.x, spot.z, spacing, spacing)) continue;
+                this.generate(spot, terrain);
+                placed++;
+            }
+        }
+        // Stage 4: brute-force random across entire terrain (doesn't use findFlatSpot)
+        for (let a = 0; a < count * 300 && placed < count; a++) {
+            const x = (Math.random() - 0.5) * terrain.size * 0.95;
+            const z = (Math.random() - 0.5) * terrain.size * 0.95;
+            if (Math.abs(x) > halfSize || Math.abs(z) > halfSize) continue;
+            const h = terrain.getHeight(x, z);
+            if (h < terrain.waterLevel + 0.5) continue;
+            if (!this.isPositionValid(x, z, 1.2, 1.2)) continue;
+            this.generate({ x, y: h, z }, terrain);
             placed++;
         }
         return placed;

@@ -522,6 +522,12 @@ class PCGWorld {
             if (this.state.lightsOn) {
                 this.houses.setInteriorLights(true);
             }
+            const hSlider = document.getElementById('houseCount');
+            const hLabel = document.getElementById('houseCountVal');
+            const hActual = this.houses.houses.length;
+            if (hSlider) { hSlider.max = 30; hSlider.value = hActual; }
+            if (hLabel) hLabel.textContent = hActual;
+            this.state.houseCount = hActual;
         }
 
         this.fire = new FireSystem(this.scene);
@@ -666,6 +672,12 @@ class PCGWorld {
                 : this.state.houseCount;
             this.houses.generateMultiple(this.terrain, count);
             if (this.state.lightsOn) this.houses.setInteriorLights(true);
+            const hSlider = document.getElementById('houseCount');
+            const hLabel = document.getElementById('houseCountVal');
+            const hActual = this.houses.houses.length;
+            if (hSlider) { hSlider.max = 30; hSlider.value = hActual; }
+            if (hLabel) hLabel.textContent = hActual;
+            this.state.houseCount = hActual;
         }
 
         const housePositions = this.houses.houses.map(h => ({
@@ -749,6 +761,13 @@ class PCGWorld {
         } else if (newCount < oldCount) {
             this.houses.removeHouses(oldCount - newCount);
         }
+
+        const label = document.getElementById('houseCountVal');
+        const slider = document.getElementById('houseCount');
+        const actual = this.houses.houses.length;
+        if (label) label.textContent = actual;
+        if (slider) { slider.value = actual; slider.max = 30; }
+        this.state.houseCount = actual;
 
         if (this.state.lightsOn) this.houses.setInteriorLights(true);
         this.updateTimeOfDay(this.state.timeOfDay);
