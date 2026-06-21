@@ -725,10 +725,12 @@ class CitySystem {
         }
 
         if (roadPositionsX.length > 2 && roadPositionsZ.length > 2) {
-            const mallIdx = Math.max(0, centerIdxX - 1);
-            const mallIdxZ = Math.max(0, centerIdxZ - 1);
-            const mx = roadPositionsX[mallIdx];
-            const mz = roadPositionsZ[mallIdxZ];
+            // Place mall BETWEEN intersections (half a grid step offset), not ON one
+            const gridSpacing = roadPositionsX.length > 1
+                ? (roadPositionsX[roadPositionsX.length-1] - roadPositionsX[0]) / (roadPositionsX.length - 1)
+                : 10;
+            const mx = cx + gridSpacing * 0.5;
+            const mz = cz + gridSpacing * 0.5;
             const mh = terrain.getHeight(mx, mz);
             if (mh >= terrain.waterLevel + 0.3) {
                 this.createShoppingMall(mx, mh, mz, terrain);
