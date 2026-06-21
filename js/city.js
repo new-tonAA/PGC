@@ -322,7 +322,7 @@ class CitySystem {
                     const slh = terrain.getHeight(slx, slz);
                     if (slh < terrain.waterLevel + 0.3) continue;
                     const armAngle = isHoriz
-                        ? (side === -1 ? Math.PI / 2 : -Math.PI / 2)
+                        ? (side === -1 ? -Math.PI / 2 : Math.PI / 2)
                         : (side === -1 ? 0 : Math.PI);
                     this.createStreetLight(slx, slh, slz, terrain, armAngle);
                 }
@@ -2378,7 +2378,7 @@ class CitySystem {
                     const slx = isH ? lx : lx + off, slz = isH ? lz + off : lz;
                     const slh = terrain.getHeight(slx, slz);
                     if (slh < terrain.waterLevel + 0.3) continue;
-                    const arm = isH ? (side === -1 ? Math.PI / 2 : -Math.PI / 2) : (side === -1 ? 0 : Math.PI);
+                    const arm = isH ? (side === -1 ? -Math.PI / 2 : Math.PI / 2) : (side === -1 ? 0 : Math.PI);
                     this.createStreetLight(slx, slh, slz, terrain, arm);
                 }
                 placed.add(lk);

@@ -127,6 +127,20 @@ class VegetationSystem {
             }
             if (tooClose) continue;
 
+            // Avoid street lights
+            const streetLights = options.streetLightPositions;
+            if (streetLights && streetLights.length > 0) {
+                for (const sl of streetLights) {
+                    const dx = x - sl.x;
+                    const dz = z - sl.z;
+                    if (dx * dx + dz * dz < (sl.radius + 0.8) * (sl.radius + 0.8)) {
+                        tooClose = true;
+                        break;
+                    }
+                }
+            }
+            if (tooClose) continue;
+
             // Avoid roads by real road segments when available.
             if (roadSegments.length > 0) {
                 for (const seg of roadSegments) {

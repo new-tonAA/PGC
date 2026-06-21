@@ -543,12 +543,25 @@ class PCGWorld {
             }
         }
 
+        // Collect street light positions for vegetation exclusion
+        const streetLightPositions = [];
+        if (this.city && this.city.streetLightLamps) {
+            for (const sl of this.city.streetLightLamps) {
+                streetLightPositions.push({
+                    x: sl.group.position.x,
+                    z: sl.group.position.z,
+                    radius: 1.2
+                });
+            }
+        }
+
         this.vegetation.generate(this.terrain, {
             seed: this.state.seed,
             settlementType: this.state.settlementType,
             housePositions,
             roadPositions,
-            roadSegments
+            roadSegments,
+            streetLightPositions
         });
 
         this.updateTimeOfDay(this.state.timeOfDay);
@@ -655,12 +668,21 @@ class PCGWorld {
                 }
             }
         }
+        const streetLightPositions2 = [];
+        if (this.city && this.city.streetLightLamps) {
+            for (const sl of this.city.streetLightLamps) {
+                streetLightPositions2.push({
+                    x: sl.group.position.x, z: sl.group.position.z, radius: 1.2
+                });
+            }
+        }
         this.vegetation.generate(this.terrain, {
             seed: this.state.seed,
             settlementType: this.state.settlementType,
             housePositions,
             roadPositions,
-            roadSegments
+            roadSegments,
+            streetLightPositions: streetLightPositions2
         });
 
         // Apply current light state to all lights
