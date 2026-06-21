@@ -1918,7 +1918,7 @@ class CitySystem {
             // 转弯动画：沿二次贝塞尔弧线行驶，朝向跟随曲线切线
             if (ud.turning) {
                 ud.turnTimer += dt;
-                const rawT = Math.min(1, ud.turnTimer / 0.5);
+                const rawT = Math.min(1, ud.turnTimer / 0.25);
                 const s = rawT * rawT * (3 - 2 * rawT); // smoothstep
 
                 // 二次贝塞尔
@@ -1971,13 +1971,13 @@ class CitySystem {
             for (let j = 0; j < this.vehicles.length; j++) {
                 if (i === j) continue;
                 const o = this.vehicles[j];
-                if (o.userData.isBoat || o.userData.turning) continue;
+                if (o.userData.isBoat) continue;
                 const odx = o.position.x - v.position.x;
                 const odz = o.position.z - v.position.z;
                 const od = Math.sqrt(odx * odx + odz * odz);
                 if (od > 10) continue;
 
-                if (o.userData.road === road) {
+                if (o.userData.road === road && !o.userData.turning) {
                     // 同路段：FIX - 只有同向车才让路（避免对向车互相刹车）
                     if (o.userData.reverse === ud.reverse) {
                         let gap;
@@ -2009,7 +2009,7 @@ class CitySystem {
             // 反堵塞
             if (ud.currentSpeed < 0.05) {
                 ud.stuckTimer = (ud.stuckTimer || 0) + dt;
-                if (ud.stuckTimer > 3) {
+                if (ud.stuckTimer > 1.0) {
                     // 找到车前方最近的路口重定向
                     const junctionX = ud.reverse ? road.start.x : road.end.x;
                     const junctionZ = ud.reverse ? road.start.z : road.end.z;
@@ -2052,11 +2052,9 @@ class CitySystem {
                 for (let j = 0; j < this.vehicles.length; j++) {
                     if (i === j) continue;
                     const o = this.vehicles[j];
-                    if (o.userData.isBoat) continue;
-                    if ((o.position.x - junctionX) ** 2 + (o.position.z - junctionZ) ** 2 < 5.0) {
-                        intersectionOccupied = true;
-                        break;
-                    }
+                    if (o.userData.isBoat || o.userData.turning) continue;
+                    const d2 = (o.position.x - junctionX) ** 2 + (o.position.z - junctionZ) ** 2;
+                    if (d2 < 3.0) { intersectionOccupied = true; break; }
                 }
 
                 if (intersectionOccupied) {
