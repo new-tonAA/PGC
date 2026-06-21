@@ -612,36 +612,6 @@ class CitySystem {
         lamp.position.set(0.8, 4.28, 0);
         group.add(lamp);
 
-        // Downward light beam cone — visible projection from lamp to ground
-        const beamHeight = 4.3;
-        const beamGeo = new THREE.CylinderGeometry(0.05, 2.0, beamHeight, 16, 1, true);
-        const beamMat = new THREE.MeshBasicMaterial({
-            color: 0xffffcc,
-            transparent: true,
-            opacity: 0.15,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-            blending: THREE.AdditiveBlending,
-        });
-        const beam = new THREE.Mesh(beamGeo, beamMat);
-        beam.position.set(0.8, 4.2 - beamHeight / 2, 0);
-        group.add(beam);
-
-        // Ground highlight disc — subtle glow circle on the road surface
-        const groundGlowGeo = new THREE.CircleGeometry(1.8, 16);
-        const groundGlowMat = new THREE.MeshBasicMaterial({
-            color: 0xffffdd,
-            transparent: true,
-            opacity: 0.12,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-            blending: THREE.AdditiveBlending,
-        });
-        const groundGlow = new THREE.Mesh(groundGlowGeo, groundGlowMat);
-        groundGlow.rotation.x = -Math.PI / 2;
-        groundGlow.position.set(0.8, 0.01, 0);
-        group.add(groundGlow);
-
         const spotLight = new THREE.SpotLight(0xffeebb, 15, 35, Math.PI / 3, 0.5, 1.5);
         spotLight.position.set(0.8, 4.2, 0);
         spotLight.target.position.set(0.8, -0.5, 0);
@@ -667,7 +637,7 @@ class CitySystem {
         this.group.add(group);
 
         this.streetLightLamps.push({
-            group, lamp, spotLight, pointLight: sLight, lampMat, beamMat, groundGlowMat
+            group, lamp, spotLight, pointLight: sLight, lampMat
         });
     }
 
@@ -1706,24 +1676,6 @@ class CitySystem {
         hlPoint.position.set(direction * 0.65, 0.25, 0);
         group.add(hlPoint);
         group.userData.headlightPoint = hlPoint;
-
-        // Visible headlight beam cone — projects forward, like real headlights
-        const beamLength = 5.0;
-        const beamGeo2 = new THREE.CylinderGeometry(0.8, 0.03, beamLength, 10, 1, true);
-        const beamMat2 = new THREE.MeshBasicMaterial({
-            color: 0xffffdd,
-            transparent: true,
-            opacity: 0.06,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-            blending: THREE.AdditiveBlending,
-        });
-        const beamMesh = new THREE.Mesh(beamGeo2, beamMat2);
-        beamMesh.rotation.z = -direction * Math.PI / 2;
-        beamMesh.position.set(direction * (0.65 + beamLength / 2), 0.2, 0);
-        group.add(beamMesh);
-        group.userData.headlightBeam = beamMesh;
-        group.userData.headlightBeamMat = beamMat2;
 
         const tailGeo = new THREE.SphereGeometry(0.05, 6, 4);
         const tailMat = new THREE.MeshBasicMaterial({

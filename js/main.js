@@ -392,12 +392,6 @@ class PCGWorld {
                             sl.lampMat.emissiveIntensity = isOn ? nightFactor * 2.5 * brightnessMult : 0;
                         }
                     }
-                    if (sl.beamMat) {
-                        sl.beamMat.opacity = Math.min(0.35, nightFactor * 0.15 * brightnessMult);
-                    }
-                    if (sl.groundGlowMat) {
-                        sl.groundGlowMat.opacity = Math.min(0.3, nightFactor * 0.12 * brightnessMult);
-                    }
                 }
                 // Vehicle headlights
                 for (const v of this.city.vehicles) {
@@ -406,9 +400,6 @@ class PCGWorld {
                     }
                     if (v.userData.headlightPoint) {
                         v.userData.headlightPoint.intensity = nightFactor * 6.0 * brightnessMult;
-                    }
-                    if (v.userData.headlightBeamMat) {
-                        v.userData.headlightBeamMat.opacity = Math.min(0.18, nightFactor * 0.08 * brightnessMult);
                     }
                     if (v.userData.tailLightMat) {
                         v.userData.tailLightMat.emissiveIntensity = nightFactor * 1.2 * brightnessMult;
@@ -450,8 +441,6 @@ class PCGWorld {
                             sl.lampMat.emissiveIntensity = 0;
                         }
                     }
-                    if (sl.beamMat) sl.beamMat.opacity = 0;
-                    if (sl.groundGlowMat) sl.groundGlowMat.opacity = 0;
                 }
                 for (const v of this.city.vehicles) {
                     if (v.userData.headlight) {
@@ -459,9 +448,6 @@ class PCGWorld {
                     }
                     if (v.userData.headlightPoint) {
                         v.userData.headlightPoint.intensity = 0;
-                    }
-                    if (v.userData.headlightBeamMat) {
-                        v.userData.headlightBeamMat.opacity = 0;
                     }
                     if (v.userData.tailLightMat) {
                         v.userData.tailLightMat.emissiveIntensity = 0;
