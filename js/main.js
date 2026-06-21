@@ -31,7 +31,7 @@ class PCGWorld {
             settlementType: 'village',
             houseCount: 2,
             vehicleCount: 5,
-            roadDensity: 50,
+            ringCount: 1,
             lightSpacing: 12,
             weather: 'clear',
             fireActive: false,
@@ -486,11 +486,20 @@ class PCGWorld {
         if (this.needsCitySystem()) {
             this.city.generate(this.terrain, this.state.seed, this.state.vehicleCount, {
                 buildingDensity: this.state.houseCount,
-                roadDensity: this.state.roadDensity,
+                ringCount: this.state.ringCount,
                 lightSpacing: this.state.lightSpacing
             });
             if (this.state.lightsOn) {
                 this.city.setLights(true);
+            }
+            // Set ring count slider max
+            const rcSlider = document.getElementById('ringCount');
+            if (rcSlider && this.city.maxRingCount) {
+                rcSlider.max = this.city.maxRingCount;
+                if (this.state.ringCount > this.city.maxRingCount) {
+                    this.state.ringCount = this.city.maxRingCount;
+                    rcSlider.value = this.city.maxRingCount;
+                }
             }
             // Sync slider to actual regular building count (landmarks not counted)
             const slider = document.getElementById('houseCount');
@@ -624,12 +633,21 @@ class PCGWorld {
             // Regenerate city layout (roads + buildings) without vehicles
             this.city.generate(this.terrain, this.state.seed, 0, {
                 buildingDensity: this.state.houseCount,
-                roadDensity: this.state.roadDensity,
+                ringCount: this.state.ringCount,
                 lightSpacing: this.state.lightSpacing,
                 skipVehicles: true
             });
             if (this.state.lightsOn) this.city.setLights(true);
             this.city.regenerateVehicles(this.terrain, savedVehicleCount);
+            // Set ring count slider max
+            const rcSlider2 = document.getElementById('ringCount');
+            if (rcSlider2 && this.city.maxRingCount) {
+                rcSlider2.max = this.city.maxRingCount;
+                if (this.state.ringCount > this.city.maxRingCount) {
+                    this.state.ringCount = this.city.maxRingCount;
+                    rcSlider2.value = this.city.maxRingCount;
+                }
+            }
             // Sync slider to regular building count
             const slider = document.getElementById('houseCount');
             const label = document.getElementById('houseCountVal');
@@ -793,14 +811,14 @@ class PCGWorld {
             });
         }
 
-        const roadDensitySlider = document.getElementById('roadDensity');
-        const roadDensityVal = document.getElementById('roadDensityVal');
-        if (roadDensitySlider) {
-            roadDensitySlider.addEventListener('input', () => {
-                this.state.roadDensity = parseInt(roadDensitySlider.value);
-                roadDensityVal.textContent = roadDensitySlider.value;
+        const ringCountSlider = document.getElementById('ringCount');
+        const ringCountVal = document.getElementById('ringCountVal');
+        if (ringCountSlider) {
+            ringCountSlider.addEventListener('input', () => {
+                this.state.ringCount = parseInt(ringCountSlider.value);
+                ringCountVal.textContent = ringCountSlider.value;
             });
-            roadDensitySlider.addEventListener('change', () => {
+            ringCountSlider.addEventListener('change', () => {
                 this.scheduleRegen();
             });
         }

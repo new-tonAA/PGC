@@ -42,7 +42,7 @@ class CitySystem {
         this.noise = new SimplexNoise(seed);
         this.terrain = terrain;
         this.scene.add(this.group);
-        this.roadDensity = options.roadDensity || 50;
+        this.ringCount = options.ringCount || 1;
         this.lightSpacing = options.lightSpacing || 12;
         this.buildingCount = options.buildingDensity || options.buildingCount || 8;
         const skipVehicles = options.skipVehicles || false;
@@ -67,16 +67,29 @@ class CitySystem {
 
     generateGridCity(terrain, vehicleCount) {
         const halfSize = terrain.size * 0.28;
-        const densityFactor = this.roadDensity / 50;
-        const blockSize = Math.max(6, Math.round(10 / densityFactor));
+        // ringCount=1 → outer rectangle only (2×2=4 corners)
+        // ringCount=2 → +1 road line per axis (3×3=9 intersections)
+        // ringCount=N → N+1 positions per axis
         const roadWidth = 2.2;
+        // Compute max viable ring count: block must be >1m for buildings
+        let maxRC = 1;
+        for (let rc = 2; rc <= 10; rc++) {
+            const gs = rc + 1;
+            const spacing = (halfSize * 2) / (gs - 1);
+            if (spacing - roadWidth * 1.5 >= 1.0) maxRC = rc;
+            else break;
+        }
+        this.maxRingCount = maxRC;
+        const ringCount = Math.max(1, Math.min(this.ringCount || 1, maxRC));
+        const gridSize = ringCount + 1;
+        const gridSpacing = gridSize > 1 ? (halfSize * 2) / (gridSize - 1) : 0;
 
         this.halfSize = halfSize;
         this.roadWidth = roadWidth;
 
         const rawPositions = [];
-        for (let pos = -halfSize; pos <= halfSize; pos += blockSize) {
-            rawPositions.push(pos);
+        for (let i = 0; i < gridSize; i++) {
+            rawPositions.push(-halfSize + i * gridSpacing);
         }
 
         const allIntersections = [];
@@ -101,7 +114,7 @@ class CitySystem {
         for (const inter of allIntersections) {
             const key = interKey(inter.x, inter.z);
             let neighbors = 0;
-            const deltas = [[blockSize,0],[-blockSize,0],[0,blockSize],[0,-blockSize]];
+            const deltas = [[gridSpacing,0],[-gridSpacing,0],[0,gridSpacing],[0,-gridSpacing]];
             for (const [dx, dz] of deltas) {
                 if (interSet.has(interKey(inter.x + dx, inter.z + dz))) {
                     neighbors++;
@@ -673,12 +686,7 @@ class CitySystem {
         const spotLight = new THREE.SpotLight(0xffeebb, 15, 35, Math.PI / 3, 0.5, 1.5);
         spotLight.position.set(0.8, 4.2, 0);
         spotLight.target.position.set(0.8, -0.5, 0);
-        spotLight.castShadow = true;
-        spotLight.shadow.mapSize.width = 512;
-        spotLight.shadow.mapSize.height = 512;
-        spotLight.shadow.camera.near = 0.5;
-        spotLight.shadow.camera.far = 40;
-        spotLight.shadow.bias = -0.0005;
+        spotLight.castShadow = false;
         group.add(spotLight);
         group.add(spotLight.target);
 
